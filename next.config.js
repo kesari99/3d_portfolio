@@ -12,8 +12,7 @@ module.exports = {
 const nextConfig = {
 	reactStrictMode: true,
 	images: {
-		loader: 'akamai',
-    	path: '',
+		unoptimized: true,
 	},
 	webpack(config) {
 		// Grab the existing rule that handles SVG imports
