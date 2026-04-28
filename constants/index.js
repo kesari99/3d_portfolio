@@ -112,7 +112,6 @@ const technologies = {
       icon: "/assets/tech/expressjs.png",
       link: "https://expressjs.com/",
     },
-    
   ],
   libraries: [
     {
@@ -162,7 +161,7 @@ const technologies = {
       icon: "/assets/tech/postman.svg",
       link: "https://www.postman.com/",
     },
-    
+
     {
       name: "Docker",
       icon: "/assets/tech/docker.svg",
@@ -175,7 +174,6 @@ const technologies = {
       icon: "/assets/tech/nodejs.svg",
       link: "https://nodejs.org/en",
     },
-   
   ],
   databases: [
     {
@@ -203,30 +201,30 @@ const technologies = {
 
 const experiences = [
   {
-    title: "Project Intern",
-    company_name: "IF MedTech",
-    icon: "/assets/company/ifmedtech.png",
+    title: "SDE-1",
+    company_name: "Repaio",
+    icon: "/assets/company/repaio.png",
     iconBg: "#E6DEDD",
-    date: "January 2024 - Present",
+    date: "June 2025 - Present",
     points: [
-      "Developed robust Android applications focused on delivering seamless and intuitive user experiences.",
-      "Established reliable connections using Bluetooth, Wi-Fi, and USB serial protocols to enable efficient device communication.",
-      "Integrated advanced AI models into mobile apps to offer predictive insights and enhance automation features.",
-      "Collaborated with multidisciplinary teams to optimize connectivity and overall app performance."
+      "Developed robust Voice AI agent focused on executing miltilingual campaigns for debt collections.",
+      "Integrated an automated work flow for AI Dispostions for multilanguages using multiple STT's and LLM's.",
+      "Integrated multi account whatsapp automation servies and integrated in crm to implement daily workflow automation.",
+      "Worked on debt collection CRM servies and integrated TATA service provider to automate agents for easy recovery.",
     ],
   },
 
   {
-    title: "Software Developer Intern",
-    company_name: "Modgenice Technologies ",
-    icon: "/assets/company/modgenics.png",
+    title: "Project Intern",
+    company_name: "IF MedTech",
+    icon: "/assets/company/ifmedtech.png",
     iconBg: "#E6DEDD",
-    date: "Oct 2024 - Nov 2024",
+    date: "January 2024 - March 2024",
     points: [
-      "Designed and implemented reusable form components using Formik and Yup, streamlining form handling and validation across multiple features to ensure consistency and reduce development time.",
-      "Integrated RESTful APIs to facilitate dynamic data fetching and real-time updates, which enhanced the application’s responsiveness and robustness.",
-      "Collaborated with cross-functional teams to refine user interface workflows and improve overall user experience through effective feedback and iterative design adjustments.",
-      "Conducted comprehensive testing and debugging of both form components and API integrations, ensuring high-quality, reliable functionality in a fast-paced development environment."
+      "Developed robust Android applications focused on delivering seamless and intuitive user experiences.",
+      "Established reliable connections using Bluetooth, Wi-Fi, and USB serial protocols to enable efficient device communication.",
+      "Integrated advanced AI models into mobile apps to offer predictive insights and enhance automation features.",
+      "Collaborated with multidisciplinary teams to optimize connectivity and overall app performance.",
     ],
   },
 
@@ -343,7 +341,7 @@ const projects = [
         name: "javacript",
         color: "blue-text-gradient",
       },
-      
+
       {
         name: "tailwindcss",
         color: "pink-text-gradient",
@@ -356,19 +354,15 @@ const projects = [
         name: "monogoDb",
         color: "yellow-text-gradient",
       },
-      
-      
     ],
     image: "/assets/projects/prompt_master_thumbnail.png",
-    source_code_link:
-      "https://github.com/kesari99/PromptMaster.git",
-    deployed_link:
-      "#",
+    source_code_link: "https://github.com/kesari99/PromptMaster.git",
+    deployed_link: "#",
   },
   {
     name: "Learning Managment App",
-    description: 
-     "Learmin Management App is a modern, scalable platform designed to streamline the creation, organization, and delivery of educational content. The app offers intuitive course management, progress tracking, and dynamic interactive features—enhanced by smooth animations and tilt effects. It effectively bridges the gap between educators and learners, providing a centralized solution for managing courses, assignments, and real-time updates while ensuring a seamless and visually appealing experience.",
+    description:
+      "Learmin Management App is a modern, scalable platform designed to streamline the creation, organization, and delivery of educational content. The app offers intuitive course management, progress tracking, and dynamic interactive features—enhanced by smooth animations and tilt effects. It effectively bridges the gap between educators and learners, providing a centralized solution for managing courses, assignments, and real-time updates while ensuring a seamless and visually appealing experience.",
     tags: [
       {
         name: "React Js",
@@ -386,7 +380,7 @@ const projects = [
         name: "node.js",
         color: "orange-text-gradient",
       },
-     
+
       {
         name: "react/react-fiber",
         color: "blue-text-gradient",
@@ -395,11 +389,8 @@ const projects = [
     image: "/assets/projects/inprogress.png",
     source_code_link:
       "https://github.com/kesari99/learning-managment-system.git",
-    deployed_link:
-      "#",
+    deployed_link: "#",
   },
-  
-  
 ];
 
 const socials = [
@@ -418,7 +409,6 @@ const socials = [
     icon: <LeetCode />,
     link: "https://leetcode.com/u/kesaridevaraya/",
   },
-  
 ];
 
 const heroTexts = [
@@ -430,7 +420,6 @@ const heroTexts = [
   500,
   "Backend developer",
   500,
- 
 ];
 
 export {

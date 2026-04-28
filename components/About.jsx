@@ -5,7 +5,7 @@ import { socials } from "../constants";
 import { fadeIn, textVariant } from "../utils/motion";
 import EmailIcon from "../public/assets/icons/email.svg";
 
-function  About() {
+function About() {
   return (
     <section
       className="md:my-36 md:w-2/3 w-full h-full xl:ml-36 lg:ml-12 p-8 md:mt-[40svh] xl:mt-[150px]"
@@ -27,11 +27,22 @@ function  About() {
         viewport={{ once: true, amount: 0.25 }}
         className="mt-4 dark:text-ctnSecondaryDark text-gray-300 text-[17px] w-full leading-[30px] flex flex-col justify-between gap-6"
       >
-        <div>
-          "I am a full stack web developer from IIIT Manipur, passionate about creating dynamic and user-centric digital experiences. I specialize in modern front-end technologies like React, Next.js, JavaScript, and TypeScript—along with Redux for efficient state management—to build responsive and scalable interfaces. On the backend, I harness the power of Node.js, Python, and Java, developing robust APIs with Django REST Framework and Spring Boot. This comprehensive skill set enables me to integrate seamlessly across the full technology stack, ensuring optimized performance and an exceptional end-user experience.
-          I continuously strive to innovate and expand my expertise and am particularly enthusiastic about exploring blockchain technology to drive decentralized solutions and enhance security in digital ecosystems."
-
-          
+        <div className="">
+          I am a Full Stack Developer from IIIT Manipur with experience building
+          scalable web applications, AI-driven automation systems, and CRM
+          platforms. I specialize in modern frontend technologies such as React,
+          Next.js, JavaScript, TypeScript, and Redux to create responsive and
+          user-centric interfaces. On the backend, I work with Node.js, Express,
+          Python, Java, and relational/non-relational databases to develop
+          robust APIs and scalable systems. I have worked on Voice AI automation
+          for debt collection campaigns, integrating telephony providers,
+          STT/TTS systems, LLMs, and workflow automation tools to build
+          intelligent multilingual solutions at scale. I have also contributed
+          to CRM platforms and end-to-end product development, focusing on
+          performance, scalability, and seamless user experience. Passionate
+          about solving real-world problems through technology, I continuously
+          explore distributed systems, AI applications, and emerging
+          technologies to expand my expertise and build impactful solutions.
           <br className="sm:block hidden" />
           Let&apos;s collaborate to bring your ideas to life!
         </div>
@@ -43,7 +54,6 @@ function  About() {
             className="hover:text-primary w-full transition-all duration-100 ease-in flex md:items-center gap-2 md:flex-row flex-wrap word-break hover:-translate-y-2"
           >
             {/* <EmailIcon className="w-[30px] h-[30px]" /> */}
-            
           </Link>
         </div>
         <div className="flex gap-5 items-center">
