@@ -3,9 +3,14 @@ import { motion } from "framer-motion";
 
 import { socials } from "../constants";
 import { fadeIn, textVariant } from "../utils/motion";
-import EmailIcon from "../public/assets/icons/email.svg";
-
 function About() {
+  const stack = [
+    "Frontend: React, Next.js, TypeScript, Redux",
+    "Backend: Node.js, Express, Python, Java",
+    "Data: PostgreSQL, MongoDB, Firebase",
+    "Exploring: distributed systems, AI agent architectures",
+  ];
+
   return (
     <section
       className="md:my-36 md:w-2/3 w-full h-full xl:ml-36 lg:ml-12 p-8 md:mt-[40svh] xl:mt-[150px]"
@@ -27,34 +32,27 @@ function About() {
         viewport={{ once: true, amount: 0.25 }}
         className="mt-4 dark:text-ctnSecondaryDark text-gray-300 text-[17px] w-full leading-[30px] flex flex-col justify-between gap-6"
       >
-        <div className="">
-          I am a Full Stack Developer from IIIT Manipur with experience building
-          scalable web applications, AI-driven automation systems, and CRM
-          platforms. I specialize in modern frontend technologies such as React,
-          Next.js, JavaScript, TypeScript, and Redux to create responsive and
-          user-centric interfaces. On the backend, I work with Node.js, Express,
-          Python, Java, and relational/non-relational databases to develop
-          robust APIs and scalable systems. I have worked on Voice AI automation
-          for debt collection campaigns, integrating telephony providers,
-          STT/TTS systems, LLMs, and workflow automation tools to build
-          intelligent multilingual solutions at scale. I have also contributed
-          to CRM platforms and end-to-end product development, focusing on
-          performance, scalability, and seamless user experience. Passionate
-          about solving real-world problems through technology, I continuously
-          explore distributed systems, AI applications, and emerging
-          technologies to expand my expertise and build impactful solutions.
-          <br className="sm:block hidden" />
-          Let&apos;s collaborate to bring your ideas to life!
-        </div>
-        <div className="w-fit break-words">
-          <Link
-            href=""
-            target="_blank"
-            rel="noreferrer"
-            className="hover:text-primary w-full transition-all duration-100 ease-in flex md:items-center gap-2 md:flex-row flex-wrap word-break hover:-translate-y-2"
-          >
-            {/* <EmailIcon className="w-[30px] h-[30px]" /> */}
-          </Link>
+        <div className="max-w-4xl space-y-5">
+          <p className="text-[20px] font-semibold dark:text-ctnPrimaryDark text-white leading-8">
+            Hi, I&apos;m Kesari — a Full Stack Developer building AI-driven
+            systems that solve real business problems.
+          </p>
+          <p>
+            I&apos;m working at an early-stage startup, Repaio, where I build
+            Voice AI and WhatsApp automation platforms for debt collection at
+            scale — integrating telephony, STT/TTS, and LLMs into multilingual,
+            production-grade systems.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3 pt-2">
+            {stack.map((item) => (
+              <div
+                key={item}
+                className="glass-card glass-card-hover rounded-lg px-4 py-3 text-[14px] leading-6"
+              >
+                {item}
+              </div>
+            ))}
+          </div>
         </div>
         <div className="flex gap-5 items-center">
           {socials.map((social) => (
@@ -62,7 +60,7 @@ function About() {
               href={social.link}
               target="_blank"
               key={social.id}
-              className="w-8 h-8 hover:-translate-y-2 ease-in transition-all duration-100 cursor-pointer"
+              className="glass-chip flex h-10 w-10 items-center justify-center rounded-lg p-2 transition-all duration-200 hover:-translate-y-1 hover:border-primary/40"
             >
               {social.icon}
             </Link>

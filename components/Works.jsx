@@ -17,8 +17,11 @@ function ProjectCard({
   image,
   source_code_link,
   deployed_link,
+  featured,
 }) {
-  const CHAR_LIMIT = 280;
+  const CHAR_LIMIT = featured ? 420 : 260;
+  const hasSource = Boolean(source_code_link);
+  const hasDemo = Boolean(deployed_link && deployed_link !== "#");
 
   return (
     <motion.div
@@ -26,14 +29,17 @@ function ProjectCard({
       initial="hidden"
       whileInView="show"
       viewport={{ once: true, amount: 0.25 }}
+      className={featured ? "md:w-[760px] w-full" : ""}
     >
       <Tilt
         tiltMaxAngleX="10"
         tiltMaxAngleY="10"
-        className="dark:bg-bgSecondaryDark bg-bgSecondaryLight p-5 rounded-2xl sm:w-[370px] w-full h-fit min-h-[590px] shadow-sm shadow-primary"
+        className={`glass-card glass-card-hover p-5 rounded-lg sm:w-[370px] w-full h-full min-h-[560px] ${
+          featured ? "md:w-full" : ""
+        }`}
       >
-        <div className="relative w-full h-[230px]">
-          <div className="w-full h-full object-cover rounded-2xl relative">
+        <div className={`relative w-full ${featured ? "md:h-[280px]" : "h-[230px]"}`}>
+          <div className="glass-chip w-full h-full object-cover rounded-lg relative overflow-hidden">
             <Image
               src={image}
               alt="project_image"
@@ -43,42 +49,81 @@ function ProjectCard({
             />
           </div>
 
-          <div className="absolute inset-0 flex justify-start m-3 card-img_hover">
-            <div
-              className="black-gradient w-10 h-10 rounded-full flex justify-center items-center cursor-pointer"
-            >
-              <RocketLogo className="w-1/2 h-1/2 mr-[2px] z-10" />
-            </div>
-          </div>
+          {featured && (
+            <span className="absolute left-3 top-3 rounded-md border border-primary/30 bg-bgPrimaryDark/80 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-white backdrop-blur">
+              Featured
+            </span>
+          )}
 
-          <div className="absolute inset-0 flex justify-end m-3 card-img_hover">
-            <div
-              onClick={() => window.open(source_code_link, "_blank")}
-              className="black-gradient w-10 h-10 rounded-full flex justify-center items-center cursor-pointer"
-            >
-              <GithubLogo className="w-2/3 h-2/3 z-10" />
+          {hasDemo && (
+            <div className="absolute inset-0 flex justify-start m-3 card-img_hover">
+              <button
+                onClick={() => window.open(deployed_link, "_blank")}
+              className="glass-chip w-10 h-10 rounded-full flex justify-center items-center cursor-pointer transition-all duration-200 hover:scale-110 hover:border-primary/40"
+                aria-label={`Open ${name} live demo`}
+              >
+                <RocketLogo className="w-1/2 h-1/2 mr-[2px] z-10" />
+              </button>
             </div>
-          </div>
+          )}
+
+          {hasSource && (
+            <div className="absolute inset-0 flex justify-end m-3 card-img_hover">
+              <button
+                onClick={() => window.open(source_code_link, "_blank")}
+                className="glass-chip w-10 h-10 rounded-full flex justify-center items-center cursor-pointer transition-all duration-200 hover:scale-110 hover:border-primary/40"
+                aria-label={`Open ${name} source code`}
+              >
+                <GithubLogo className="w-2/3 h-2/3 z-10" />
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="mt-5">
+        <div className="mt-5 flex h-[calc(100%-250px)] flex-col">
           <h3 className="dark:text-ctnPrimaryDark text-ctnPrimaryLight font-bold text-[24px]">
             {name}
           </h3>
-          <p className="mt-2 dark:text-ctnSecondaryDark text-ctnSecondaryLight text-[14px]">
+          <p className="mt-2 dark:text-ctnSecondaryDark text-ctnSecondaryLight text-[14px] leading-6">
             {truncateText(description, CHAR_LIMIT)}
           </p>
-        </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          {tags.map((tag) => (
-            <p
-              key={`${name}-${tag.name}`}
-              className={`text-[14px] ${tag.color}`}
-            >
-              #{tag.name}
-            </p>
-          ))}
+          <div className="mt-4 flex flex-wrap gap-2">
+            {tags.map((tag) => (
+              <p
+                key={`${name}-${tag.name}`}
+                className={`text-[13px] ${tag.color}`}
+              >
+                #{tag.name}
+              </p>
+            ))}
+          </div>
+
+          <div className="mt-auto flex flex-wrap gap-3 pt-5">
+            {hasDemo && (
+              <button
+                onClick={() => window.open(deployed_link, "_blank")}
+                className="glass-chip flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold dark:text-ctnPrimaryDark text-ctnPrimaryLight transition-all duration-200 hover:-translate-y-1 hover:border-primary/40"
+              >
+                <RocketLogo className="h-4 w-4" />
+                Live
+              </button>
+            )}
+            {hasSource && (
+              <button
+                onClick={() => window.open(source_code_link, "_blank")}
+                className="glass-chip flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold dark:text-ctnPrimaryDark text-ctnPrimaryLight transition-all duration-200 hover:-translate-y-1 hover:border-primary/40"
+              >
+                <GithubLogo className="h-4 w-4" />
+                Code
+              </button>
+            )}
+            {!hasDemo && !hasSource && (
+              <span className="glass-chip rounded-md px-3 py-2 text-sm dark:text-ctnSecondaryDark text-ctnSecondaryLight">
+                Architecture available on request
+              </span>
+            )}
+          </div>
         </div>
       </Tilt>
     </motion.div>

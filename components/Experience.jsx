@@ -19,13 +19,21 @@ function ExperienceCard({ experience, theme }) {
       contentStyle={{
         background:
           theme !== "dark"
-            ? "linear-gradient(90deg, rgba(224,234,240,1) 0%, rgba(232,239,243,1) 50%, rgba(224,234,240,1) 100%)"
-            : "linear-gradient(90deg, rgba(33,33,52,1) 0%, rgba(39,39,61,1) 50%, rgba(33,33,52,1) 100%)",
+            ? "rgba(255, 255, 255, 0.28)"
+            : "rgba(255, 255, 255, 0.06)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
+        border: `1px solid ${
+          theme !== "dark" ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.12)"
+        }`,
+        borderRadius: "8px",
         color: theme !== "dark" ? "#7e8c9f" : "#e5e6e9",
-        boxShadow: "0 1px 2px 0 rgb(128, 77, 238)",
+        boxShadow: "0 16px 40px rgba(128, 77, 238, 0.12)",
       }}
       contentArrowStyle={{
-        borderRight: `7px solid ${theme !== "dark" ? "#e0eaf0" : "#2b2b42"}`,
+        borderRight: `7px solid ${
+          theme !== "dark" ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.12)"
+        }`,
       }}
       style={{
         boxShadow: "0 1px 2px 0 rgb(128, 77, 238 / 0.05)",

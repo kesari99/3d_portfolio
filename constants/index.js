@@ -56,16 +56,6 @@ const services = [
 const technologies = {
   languages: [
     {
-      name: "HTML5",
-      icon: "/assets/tech/html5.svg",
-      link: "https://html.spec.whatwg.org/multipage/",
-    },
-    {
-      name: "CSS3",
-      icon: "/assets/tech/css3.svg",
-      link: "https://www.w3.org/Style/CSS/Overview.en.html",
-    },
-    {
       name: "JavaScript",
       icon: "/assets/tech/javascript.svg",
       link: "https://262.ecma-international.org/",
@@ -96,28 +86,21 @@ const technologies = {
       link: "https://kotlinlang.org/",
     },
   ],
-  frameworks: [
+  frontend: [
+    {
+      name: "React.js",
+      icon: "/assets/tech/react.svg",
+      link: "https://react.dev/",
+    },
     {
       name: "Next.js",
       icon: "/assets/tech/nextjs.svg",
       link: "https://nextjs.org/",
     },
     {
-      name: "TailwindCSS",
+      name: "Tailwind CSS",
       icon: "/assets/tech/tailwindcss.svg",
       link: "https://tailwindcss.com/",
-    },
-    {
-      name: "Express.js",
-      icon: "/assets/tech/expressjs.png",
-      link: "https://expressjs.com/",
-    },
-  ],
-  libraries: [
-    {
-      name: "React",
-      icon: "/assets/tech/react.svg",
-      link: "https://react.dev/",
     },
     {
       name: "Three.js",
@@ -125,24 +108,41 @@ const technologies = {
       link: "https://threejs.org/",
     },
     {
-      name: "Styled-Components",
-      icon: "/assets/tech/styled-components.png",
-      link: "https://styled-components.com/",
-    },
-    {
-      name: "Framer-motion",
+      name: "Framer Motion",
       icon: "/assets/tech/framer.svg",
       link: "https://www.framer.com/motion/",
     },
+  ],
+  backendData: [
     {
-      name: "NextAuth.js",
-      icon: "/assets/tech/nextauthjs.png",
-      link: "https://next-auth.js.org/",
+      name: "Node.js",
+      icon: "/assets/tech/nodejs.svg",
+      link: "https://nodejs.org/en",
+    },
+    {
+      name: "Express.js",
+      icon: "/assets/tech/expressjs.png",
+      link: "https://expressjs.com/",
+    },
+    {
+      name: "PostgreSQL",
+      icon: "/assets/tech/postgress.jpeg",
+      link: "https://www.postgresql.org/",
+    },
+    {
+      name: "MongoDB",
+      icon: "/assets/tech/mongodb.svg",
+      link: "https://www.mongodb.com/",
     },
     {
       name: "Prisma",
       icon: "/assets/tech/prisma.svg",
       link: "https://www.prisma.io/",
+    },
+    {
+      name: "Firebase",
+      icon: "/assets/tech/firebase.svg",
+      link: "https://firebase.google.com/",
     },
   ],
   tools: [
@@ -152,7 +152,7 @@ const technologies = {
       link: "https://git-scm.com/",
     },
     {
-      name: "Github",
+      name: "GitHub",
       icon: "/assets/icons/github.svg",
       link: "https://github.com/",
     },
@@ -168,35 +168,6 @@ const technologies = {
       link: "https://www.docker.com/",
     },
   ],
-  environments: [
-    {
-      name: "Node.js",
-      icon: "/assets/tech/nodejs.svg",
-      link: "https://nodejs.org/en",
-    },
-  ],
-  databases: [
-    {
-      name: "MongoDB",
-      icon: "/assets/tech/mongodb.svg",
-      link: "https://www.mongodb.com/",
-    },
-    {
-      name: "Firebase",
-      icon: "/assets/tech/firebase.svg",
-      link: "https://firebase.google.com/",
-    },
-    {
-      name: "MySQL",
-      icon: "/assets/tech/my-sql.png",
-      link: "https://www.mysql.com/",
-    },
-    {
-      name: "Postgress",
-      icon: "/assets/tech/postgress.jpeg",
-      link: "https://www.mysql.com/",
-    },
-  ],
 };
 
 const experiences = [
@@ -207,10 +178,10 @@ const experiences = [
     iconBg: "#E6DEDD",
     date: "June 2025 - Present",
     points: [
-      "Developed robust Voice AI agent focused on executing miltilingual campaigns for debt collections.",
-      "Integrated an automated work flow for AI Dispostions for multilanguages using multiple STT's and LLM's.",
-      "Integrated multi account whatsapp automation servies and integrated in crm to implement daily workflow automation.",
-      "Worked on debt collection CRM servies and integrated TATA service provider to automate agents for easy recovery.",
+      "Built multilingual Voice AI agents for debt collection campaigns, integrating telephony, STT/TTS systems, and LLM workflows.",
+      "Designed automated AI disposition pipelines that classify call outcomes and sync campaign insights back into CRM workflows.",
+      "Integrated multi-account WhatsApp automation to support daily collections, follow-ups, and team operations.",
+      "Connected TATA telephony services with the collections CRM to streamline recovery workflows for agents.",
     ],
   },
 
@@ -275,26 +246,26 @@ const projects = [
   {
     name: "Real Estate Application",
     description:
-      "A Comsumer to Owner Property Based Managment Application that allows customers to buy and rent properties and maintain contacts with land owners",
+      "A consumer-to-owner property management application that helps customers discover properties for sale or rent and connect directly with landowners. I built the full-stack workflow for listings, property details, user interactions, and database-backed property management.",
     tags: [
       {
-        name: "React JS",
+        name: "React.js",
         color: "blue-text-gradient",
       },
       {
-        name: "Node Js",
+        name: "Node.js",
         color: "yellow-text-gradient",
       },
       {
-        name: "tailwindcss",
+        name: "Tailwind CSS",
         color: "pink-text-gradient",
       },
       {
-        name: "FireBase",
+        name: "Firebase",
         color: "orange-text-gradient",
       },
       {
-        name: "Mongo DB",
+        name: "MongoDB",
         color: "yellow-text-gradient",
       },
     ],
@@ -303,28 +274,28 @@ const projects = [
     deployed_link: "",
   },
   {
-    name: "School Managment App",
+    name: "School Management App",
     description:
-      "Designed a complemte school managment app that keeps tracks for admin, teacher, student and parent along with their individual functionalities",
+      "Designed a complete school management platform for admins, teachers, students, and parents. The app supports role-specific dashboards, academic data management, and structured workflows for daily school operations.",
     tags: [
       {
-        name: "next.js",
+        name: "Next.js",
         color: "blue-text-gradient",
       },
       {
-        name: "tailwind css",
+        name: "Tailwind CSS",
         color: "green-text-gradient",
       },
       {
-        name: "postgresql",
+        name: "PostgreSQL",
         color: "pink-text-gradient",
       },
       {
-        name: "prismaORM",
+        name: "Prisma ORM",
         color: "orange-text-gradient",
       },
       {
-        name: "mongoDB",
+        name: "MongoDB",
         color: "yellow-text-gradient",
       },
     ],
@@ -333,25 +304,25 @@ const projects = [
     deployed_link: "",
   },
   {
-    name: "Promt Master",
+    name: "Prompt Master",
     description:
-      "Manage your AI promts based on tags and search functionalites.Implemented effective sorting, searching and filterting ability",
+      "A prompt management tool for organizing AI prompts by tags, search terms, and categories. I implemented sorting, filtering, and search flows so users can quickly find reusable prompts for different use cases.",
     tags: [
       {
-        name: "javacript",
+        name: "JavaScript",
         color: "blue-text-gradient",
       },
 
       {
-        name: "tailwindcss",
+        name: "Tailwind CSS",
         color: "pink-text-gradient",
       },
       {
-        name: "node.js",
+        name: "Node.js",
         color: "orange-text-gradient",
       },
       {
-        name: "monogoDb",
+        name: "MongoDB",
         color: "yellow-text-gradient",
       },
     ],
@@ -360,33 +331,33 @@ const projects = [
     deployed_link: "#",
   },
   {
-    name: "Learning Managment App",
+    name: "Learning Management App",
     description:
-      "Learmin Management App is a modern, scalable platform designed to streamline the creation, organization, and delivery of educational content. The app offers intuitive course management, progress tracking, and dynamic interactive features—enhanced by smooth animations and tilt effects. It effectively bridges the gap between educators and learners, providing a centralized solution for managing courses, assignments, and real-time updates while ensuring a seamless and visually appealing experience.",
+      "A scalable learning management platform for creating, organizing, and delivering educational content. It includes course management, progress tracking, assignments, real-time updates, and animated learning interfaces for a smoother student experience.",
     tags: [
       {
-        name: "React Js",
+        name: "React.js",
         color: "blue-text-gradient",
       },
       {
-        name: "shadcnUI",
+        name: "shadcn/ui",
         color: "green-text-gradient",
       },
       {
-        name: "tailwindcss",
+        name: "Tailwind CSS",
         color: "pink-text-gradient",
       },
       {
-        name: "node.js",
+        name: "Node.js",
         color: "orange-text-gradient",
       },
 
       {
-        name: "react/react-fiber",
+        name: "React Three Fiber",
         color: "blue-text-gradient",
       },
     ],
-    image: "/assets/projects/inprogress.png",
+    image: "/assets/projects/learning_management_system.svg",
     source_code_link:
       "https://github.com/kesari99/learning-managment-system.git",
     deployed_link: "#",
