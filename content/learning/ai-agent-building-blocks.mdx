@@ -1,0 +1,138 @@
+---
+title: "Building Blocks of a Real-Time AI Agent: LiveKit, LangChain and LangGraph"
+date: "2026-07-20"
+summary: "The second step of my journey: the concepts behind LiveKit, LangChain and LangGraph that helped me think about voice and agent systems."
+topic: "AI Agents"
+status: "learning"
+sources:
+  - label: "LiveKit Agents documentation"
+    href: "https://docs.livekit.io/agents/"
+  - label: "LiveKit Agents (JS) on GitHub"
+    href: "https://github.com/livekit/agents-js"
+  - label: "LangChain documentation: Overview"
+    href: "https://docs.langchain.com/oss/python/langchain/overview"
+  - label: "LangGraph documentation: Overview"
+    href: "https://docs.langchain.com/oss/python/langgraph/overview"
+  - label: "LangGraph documentation: Graph API"
+    href: "https://docs.langchain.com/oss/python/langgraph/graph-api"
+  - label: "LangGraph documentation: Persistence"
+    href: "https://docs.langchain.com/oss/python/langgraph/persistence"
+  - label: "LangGraph documentation: Interrupts"
+    href: "https://docs.langchain.com/oss/python/langgraph/interrupts"
+---
+
+After real-time messaging, the next step was voice. Three names kept coming up: **LiveKit** for the audio, and **LangChain** and **LangGraph** for the reasoning. This note collects the ideas behind them that changed how I think about these systems. It is not a retelling of what I built: that is in [the voice calling article](/articles/ai-voice-calling-platform) and [the WhatsApp conversations article](/articles/ai-two-way-whatsapp-conversations).
+
+I have used LiveKit in production. LangChain and LangGraph are things I am still learning, and I have tried to be clear about which is which.
+
+## The big picture
+
+```text
+Caller / user
+     |
+     v
+LiveKit              audio, turn-taking
+     |
+     v
+LangChain/LangGraph  reasoning and flow
+     |
+     v
+Application backend  validates, acts, stores
+```
+
+Each layer solves a different kind of problem. LiveKit is about **time** (latency, interruptions). LangChain and LangGraph are about **control flow** (what should the agent do next, and what state does it carry). The application backend is about **consequences** (checking what the model asked for, and doing it safely).
+
+## LiveKit: the real-time voice layer
+
+LiveKit is an open-source platform for real-time audio and video, built on WebRTC. The core ideas are **rooms**, **participants** and **tracks**: people and programs join a room and publish or subscribe to audio and video tracks.
+
+The **Agents** framework lets a Python or Node.js program join a room as a participant. Your code registers with an agent server, which waits for a dispatch request and then starts a job that joins the room. Once it is in, the framework streams audio through a **speech-to-text, language model, text-to-speech** pipeline and handles the awkward parts: detecting when the user has finished speaking, handling interruptions, and calling tools. It has plug-ins for most speech and model providers, and SIP integration so agents can place and receive phone calls.
+
+Three ideas helped me most:
+
+- **The pipeline is a chain of streaming stages, and each stage is a node you can override.** The default behaviour is never quite right for a real phone call, and the nodes are where you fix that.
+- **Turn-taking is a model, not a timer.** Deciding that someone has finished speaking is a prediction. Getting it wrong either cuts people off or leaves dead air.
+- **Latency is a budget spread across stages.** Speech recognition, the model and speech synthesis each take a share, so you reduce delay by measuring each stage, not by tuning the whole.
+
+How I applied these, including interruptions, echo and voicemail, is in [the voice calling article](/articles/ai-voice-calling-platform).
+
+## LangChain: a standard harness for model plus tools
+
+LangChain gives you a common interface over model providers and a ready-made way to build an agent. Its current framing is **agent = model + harness**, where the harness is the prompt, the tools and any middleware that shapes behaviour. You pass plain functions as tools and call `create_agent`:
+
+```python
+from langchain.agents import create_agent
+
+def get_weather(city: str) -> str:
+    """Get weather for a given city."""
+    return f"It's always sunny in {city}!"
+
+agent = create_agent(
+    model="openai:gpt-5.5",
+    tools=[get_weather],
+    system_prompt="You are a helpful assistant",
+)
+
+agent.invoke({"messages": [{"role": "user", "content": "Weather in Pune?"}]})
+```
+
+What it gives you is a loop (model, tool call, tool result, model again) that you would otherwise write yourself, swappable model providers, and **middleware** for things like guardrails and retries. Agents built this way run on LangGraph underneath, which is how they get persistence and human-in-the-loop support.
+
+### The trade-off to understand
+
+A framework saves you the model, tool and result loop, and gives you integrations. Writing the loop yourself gives you exact control over each step, such as forcing a first tool call or capping the number of tool rounds. The question to ask of any framework is whether it lets you express the control you need. That is what leads to LangGraph.
+
+## LangGraph: when the flow is the product
+
+LangGraph is a lower-level framework for **long-running, stateful agents**. You describe the agent as a graph:
+
+- **State** is a shared snapshot, defined as a typed schema. Each key can have a **reducer** that decides how an update merges into what is stored (replace, append to a list, merge messages).
+- **Nodes** are functions that take the state and return a partial update.
+- **Edges** connect nodes. Normal edges always go to the next node. **Conditional edges** call a routing function to choose where to go. `START` and `END` mark the ends.
+- A `Command` returned from a node can combine a state update and a routing decision in one value.
+
+```python
+from langgraph.graph import StateGraph, MessagesState, START, END
+
+def reply(state: MessagesState):
+    last = state["messages"][-1]["content"]
+    return {"messages": [{"role": "ai", "content": f"You said: {last}"}]}
+
+builder = StateGraph(MessagesState)
+builder.add_node("reply", reply)
+builder.add_edge(START, "reply")
+builder.add_edge("reply", END)
+graph = builder.compile()
+```
+
+The features I find most interesting are the ones that make it suitable for long-running work:
+
+- **Persistence.** A *checkpointer* saves state after each step. A `thread_id` in the run config identifies a conversation, so calls with the same id continue from the same state. `InMemorySaver` is for experiments, and database-backed savers (SQLite, Postgres) are for real use.
+- **Interrupts.** Calling `interrupt(value)` inside a node pauses the graph, saves state, and waits. You resume with `Command(resume=...)` and the same `thread_id`, and the value you pass becomes the return value of `interrupt`. This is how a human approves an action mid-flow.
+- **Rules that follow from the design.** A node reruns from its start on resume, so anything before an `interrupt` must be safe to repeat. And a bare `try/except` around `interrupt` would swallow it, because interrupts work by raising.
+
+### Why it caught my attention
+
+A reply flow that checks a state, branches, classifies and then answers is already a small graph, even if nobody calls it one. [My WhatsApp reply flow](/articles/ai-two-way-whatsapp-conversations) is like that. LangGraph would give names to those parts and take over saving the state and resuming. Whether that is worth adopting depends on how often a flow grows branches, waits on a human, or needs to survive a restart.
+
+## How they fit together
+
+Picture one phone call handled by an agent:
+
+1. **LiveKit** streams the caller's audio to speech-to-text and decides when the caller has finished a turn.
+2. The transcript goes to the **reasoning layer**. A plain model call works for a simple agent. A **LangGraph** flow is better when there are branches, a human approval, or state that must survive a restart.
+3. The model's reply, and any tool it asks for, goes to the **application backend**, which validates it before doing anything.
+4. The reply goes back through the voice pipeline to speech and out to the caller, and the outcome is written to the database.
+
+The lesson that cuts across all three is the same one I keep relearning: **the model suggests, and the application decides.** The framework changes how much of the decision loop you write yourself, but not who is responsible for validating it.
+
+## What I would build next
+
+A small project that touches all three layers, so each has to earn its place:
+
+1. A **LiveKit** voice agent that answers questions.
+2. Its flow written as a **LangGraph** graph: greet, understand the request, optionally ask a human to approve a sensitive step with `interrupt`, then respond. Use a checkpointer so the conversation survives a restart.
+3. A backend function that validates every tool call before running it.
+4. A short write-up of what each layer made easier, and what it made harder.
+
+When it is done I will update this note with what actually broke.

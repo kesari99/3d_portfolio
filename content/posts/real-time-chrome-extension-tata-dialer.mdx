@@ -1,0 +1,213 @@
+---
+title: "Building a Real-Time Chrome Extension for Tata Dialer: Customer Context During Every Call"
+date: "2025-08-11"
+summary: "How a small Chrome extension brings customer details into the dialer the moment a call arrives, using Socket.IO, Redis and a carefully managed call lifecycle."
+tags: ["Chrome Extensions", "WebSockets", "Socket.IO", "Redis", "Node.js", "Real-Time Systems"]
+---
+
+**Topics:** Chrome Extensions, WebSockets, Socket.IO, Redis, Node.js, Real-Time Systems
+
+## The Problem: Agents Shouldn't Have to Search for Every Customer
+
+When customer support or collections agents receive a call, one of the first things they need to do is identify the person calling them. They often have to switch between the dialer and their CRM, search using the customer's phone number, and open the relevant record before they can begin a productive conversation.
+
+Those extra steps add friction to every interaction. When agents handle calls continuously throughout the day, even small interruptions make the workflow less efficient.
+
+I worked on a Chrome extension that solves this problem by bringing customer context directly into the Tata Dialer interface.
+
+Instead of manually navigating to another application, the agent receives a dialog containing the relevant customer details when an incoming call arrives. When the call ends, the dialog remains visible briefly and closes automatically after 30 seconds.
+
+The idea was simple: **make customer information available at the exact moment an agent needs it, without forcing them to leave their calling workflow.**
+
+## What I Built
+
+The extension integrates the existing dialer experience with customer information from the backend. It responds to call lifecycle changes and manages the visibility of the customer details dialog accordingly.
+
+The core functionality includes:
+
+- **Incoming-call detection:** Recognizes when a call arrives and initiates the customer-context workflow.
+- **Customer information display:** Opens a dialog within the dialer interface and displays the relevant customer's details.
+- **Real-time communication:** Uses a WebSocket-based architecture to coordinate call-related updates between the backend and the browser extension.
+- **Automatic dialog cleanup:** Starts a 30-second delay after a call ends before closing the dialog.
+- **Backend integration:** Connects the extension to the application services responsible for customer data and real-time events.
+
+The important part was not simply displaying a modal. It was making sure that the dialog reflected the actual state of the call and remained useful throughout the interaction.
+
+## Architecture: Connecting the Browser Extension to the Backend
+
+A browser extension operates inside the browser, while customer information and application logic generally live on the backend. Connecting these layers reliably requires a way to exchange data and communicate events as they happen.
+
+The solution uses a real-time communication layer built around WebSockets and Socket.IO, with Redis supporting communication across backend instances.
+
+The architecture can be understood through four components.
+
+**1. Chrome extension**
+
+The extension integrates with the Tata Dialer page and manages the customer details dialog. It responds to call-related events, renders the appropriate information, and controls when the dialog opens and closes.
+
+**2. Backend services**
+
+The backend handles application logic and provides access to the customer information required by the extension. It also participates in delivering real-time updates to the connected browser.
+
+**3. Socket.IO and WebSockets**
+
+Socket.IO provides the real-time communication layer between the server and the connected client. Instead of repeatedly asking the backend whether something has changed, the client can receive updates when relevant events occur.
+
+**4. Redis**
+
+Redis is used with the Socket.IO Redis adapter to support communication across multiple server instances. This allows socket events to be distributed across instances rather than remaining confined to the process that generated them.
+
+The distinction is important: Redis supports the backend's real-time infrastructure, while the browser extension communicates through the socket connection.
+
+## The Call Lifecycle: From Incoming Call to Automatic Cleanup
+
+The central workflow follows the lifecycle of a call.
+
+When a call arrives, the extension needs to identify the associated customer and present the information without requiring the agent to perform a manual search.
+
+The process follows this sequence:
+
+```text
+Incoming Call
+     |
+     v
+Call Event Received
+     |
+     v
+Identify Customer
+     |
+     v
+Retrieve Customer Details
+     |
+     v
+Open Dialog in Tata Dialer
+     |
+     v
+Agent Handles the Call
+     |
+     v
+Call Ends
+     |
+     v
+Start 30-Second Delay
+     |
+     v
+Close Customer Dialog
+```
+
+Each step depends on the previous one. For example, opening the dialog before the relevant customer information is available could leave the agent looking at an incomplete or empty panel. Similarly, closing it immediately when the call ends could remove information the agent still needs to review.
+
+Handling the lifecycle as a sequence of explicit events makes the behavior easier to reason about and maintain.
+
+## Real-Time Updates Without Constant Polling
+
+One of the key engineering decisions was using a real-time communication approach instead of relying on repeated polling.
+
+With polling, the browser periodically sends requests to check whether a new call has arrived or whether the current call has ended. This introduces unnecessary requests and can delay the interface's response until the next polling interval.
+
+With WebSockets, the application can communicate over a persistent connection. Socket.IO provides the event-based interface used for real-time communication.
+
+For this workflow, the extension needs to react to meaningful changes in call state, including the arrival and completion of a call.
+
+A simplified conceptual flow looks like this:
+
+```text
+Tata Dialer / Call Workflow
+            |
+            v
+      Backend Services
+            |
+            v
+       Socket.IO
+            |
+            v
+     Chrome Extension
+            |
+            v
+   Customer Details Dialog
+```
+
+The benefit is that the extension can react to updates rather than continuously checking for them.
+
+Maintaining this connection also requires appropriate session authentication and origin validation. The backend must ensure that the extension's connection is authorized and that customer information is delivered only to the appropriate user.
+
+## Why Redis Matters in a Real-Time System
+
+Redis becomes particularly useful when an application needs to support multiple backend instances.
+
+Without a shared adapter, socket events generated by one server instance may not automatically reach clients connected to another instance.
+
+The Socket.IO Redis adapter addresses this by distributing socket communication between server instances through Redis Pub/Sub.
+
+This provides a foundation for scaling the real-time layer without changing the extension's basic interaction model. The browser can continue consuming socket events while the backend manages how those events move across its infrastructure.
+
+Redis is not responsible for rendering the customer details or controlling the 30-second timer. Its role is to support communication in the backend architecture.
+
+Separating these responsibilities keeps the system easier to understand: the extension handles the user interface, the backend manages application data and events, Socket.IO handles real-time communication, and Redis helps coordinate that communication across instances.
+
+## The 30-Second Delay: A Small UX Decision With Important Edge Cases
+
+One detail that makes the extension more practical is its behavior after the call ends.
+
+Closing the customer dialog immediately can be inconvenient because the agent may still need a moment to review the customer's details. Keeping it open indefinitely, on the other hand, can leave outdated information on the screen and interfere with the next interaction.
+
+The 30-second delay provides a middle ground. The dialog remains available briefly after the call and then closes automatically.
+
+Implementing delayed cleanup requires careful handling of the call lifecycle. A timer should be associated with the relevant call, and a new incoming call should not be affected by an earlier call's cleanup timer.
+
+The conceptual logic is:
+
+```javascript
+let closeTimer = null;
+let activeCallId = null;
+
+function onCallStarted(call) {
+  clearTimeout(closeTimer);
+  activeCallId = call.id;
+
+  openCustomerDialog(call.customer);
+}
+
+function onCallEnded(call) {
+  if (call.id !== activeCallId) return;
+
+  clearTimeout(closeTimer);
+
+  closeTimer = setTimeout(() => {
+    if (activeCallId === call.id) {
+      closeCustomerDialog();
+      activeCallId = null;
+    }
+  }, 30_000);
+}
+```
+
+This snippet illustrates the lifecycle principle rather than reproducing the project's exact implementation.
+
+The important considerations are clearing stale timers, associating updates with the correct call, and avoiding a delayed cleanup operation that accidentally closes the dialog for a newer interaction.
+
+These details matter in real-time interfaces because events do not always arrive in the order a developer expects. A solution that works for a single call may behave differently when calls overlap, updates arrive late, or the browser temporarily loses its connection.
+
+## The Engineering Lessons
+
+Building this integration reinforced several principles that apply to real-time applications more broadly.
+
+**Real-time UI should follow application state.** A dialog should open or close in response to the appropriate call lifecycle events rather than behaving as an independent visual component.
+
+**Browser extensions can improve existing workflows without replacing the underlying application.** Integrating directly into the dialer's interface can remove unnecessary navigation while preserving the tools agents already use.
+
+**WebSockets are useful when the interface must react to events immediately.** A persistent, event-driven connection provides a natural way to deliver call-related updates to the extension.
+
+**Delayed actions need lifecycle awareness.** Timers should be coordinated with the state that created them so that stale operations do not affect newer interactions.
+
+**Scalability depends on the backend as well as the browser.** Redis-backed Socket.IO communication provides a foundation for distributing real-time events across server instances while keeping responsibilities separated.
+
+## Final Thoughts
+
+This project is an example of how a relatively small browser extension can make an existing business workflow significantly more convenient.
+
+The extension brings customer information into the Tata Dialer at the time an agent receives a call, keeps the information available throughout the interaction, and automatically cleans up the dialog after a short delay.
+
+Behind that simple experience is the coordination of browser behavior, customer data, real-time events, socket connections, and backend infrastructure.
+
+For me, the most interesting aspect was connecting these pieces into one coherent workflow. The goal was not to introduce another application that agents had to learn. It was to make the tools they already used work together more effectively.

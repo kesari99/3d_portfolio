@@ -1,0 +1,208 @@
+---
+title: "Building an AI Auto-Disposition Pipeline: From Call Recording to Structured Outcomes with Dynamic Prompts"
+date: "2026-04-10"
+summary: "How I turned call recordings into structured dispositions automatically: a queue-driven transcription pipeline, and a prompt-defined contract where input and output variables are not fixed."
+tags: ["Node.js", "Speech-to-Text", "OpenAI", "AWS SQS", "Prompt Engineering", "Workflow Automation"]
+---
+
+**Topics:** Node.js, Speech-to-Text, OpenAI, AWS SQS, Prompt Engineering, Workflow Automation
+
+Every call ends with the same question: what happened?
+
+In a collections workflow the answer has a name, a disposition. Did we reach the right person? Did they promise to pay? On which date? Are they asking not to be contacted again? Teams usually record that by hand after each call, which is slow, inconsistent from one agent to the next, and impossible to apply to thousands of calls a day.
+
+I built an auto-disposition feature that does it from the recording. It transcribes the call, reads the transcript with a language model, and writes back a structured outcome. The part I find most interesting is that none of the outputs are hard-coded. The prompt is the contract.
+
+In this post:
+
+- The pipeline from recording to disposition
+- Transcribing real, multilingual phone audio
+- Making a queue-driven workflow safe to retry
+- Why the prompt, and not the code, defines the variables
+- How the output is stored so new variables never need a migration
+- What I would build around it next
+
+## The Problem: Dispositions Are Valuable and Tedious
+
+A disposition is not just a label. It drives what happens next: who gets a follow-up, which promises need checking, which customers should be left alone.
+
+Done manually, three problems show up quickly:
+
+- **Inconsistency.** Two agents describe the same call differently.
+- **Delay.** Outcomes are recorded after the fact, if at all.
+- **Rigidity.** When the business wants a new field, such as the customer's stated reason or whether they escalated, every agent has to start entering it.
+
+The goal was to make the recording the source of truth and derive everything else from it, in a way that could change as the business changed.
+
+## The Pipeline
+
+The workflow is a sequence of stages, each recorded as a status on the disposition record:
+
+```text
+Recording received
+      |
+      v
+PENDING  --> request queue
+      |
+      v
+TRANSCRIBING   (speech-to-text job started)
+      |
+      v   response queue
+TRANSCRIBED    (diarized transcript saved)
+      |
+      v
+PROCESSING_LLM (prompt + transcript -> JSON)
+      |
+      v
+COMPLETED  /  ERROR
+```
+
+Two queues sit in the middle. One carries requests to start transcription. The other carries the finished transcripts back. Using a queue means a slow transcription, a restart or a spike in volume never blocks anything else, and a stage can fail and be retried without losing the recording.
+
+## Transcribing Phone Calls
+
+Real call audio is hard. It is narrow-band, noisy, and often a mix of an Indian language and English words like "EMI" or "penalty" in the same sentence.
+
+A few decisions made the transcripts far more useful:
+
+**Diarization.** The transcript is split by speaker, so the model reads "Speaker 0 said... Speaker 1 said..." instead of one undifferentiated block. The question "who promised what?" depends on knowing who said it.
+
+**Original and translation, kept separate.** The speech provider can return the original speech and a translation. The pipeline keeps both, in order, and detects the call's primary language by counting which language dominates the original tokens.
+
+**Domain context for the recogniser.** The transcription request includes a short description of the setting: a loan repayment call, the vocabulary to expect, who the two speakers are, and the tone. That nudges the recogniser toward words like "foreclosure", "waiver" and "promise to pay" rather than phonetically similar alternatives.
+
+**Providers behind a factory.** Several speech-to-text providers are supported behind one interface. Swapping one for another is a configuration change, not a rewrite.
+
+## Making a Queue-Driven Workflow Safe
+
+Queues like SQS deliver messages **at least once**. That sentence is easy to read and easy to forget, and it shapes how every worker has to be written.
+
+The workers follow a few rules:
+
+- **Check before you act.** If a request arrives for a recording that has already started, skip it. If a response arrives for one that is already completed or failed, skip it.
+- **Drop what can never succeed.** A message with invalid JSON is logged and deleted instead of being retried forever.
+- **Leave it for redelivery only when retrying can help.** If saving a result fails, the message is left on the queue so it comes back. If the work genuinely failed, the error is recorded on the disposition and the message is removed.
+- **Size the visibility timeout to the work.** The request worker needs a short window. The response worker needs a long one, because it covers the language model call and its retries.
+- **Clean up after success.** Once a transcript is saved, the provider-side job is deleted, so recordings do not pile up in a third-party system.
+
+None of this is glamorous, but it is the difference between a pipeline that works in a demo and one that quietly survives a bad day.
+
+## The Prompt Is the Contract
+
+Here is the design idea that matters most.
+
+The simplest way to build this would be to hard-code a schema: category, name, date, summary. It would also be the wrong way, because the fields people want change constantly.
+
+Instead, the model is given three things:
+
+1. **A system prompt**, written per client, that describes the task, the rules and the format of the answer.
+2. **A small set of context values**, as JSON: things the model should know but that are not in the audio, such as the call date.
+3. **The transcript**, labelled by speaker.
+
+The model is asked to answer as a single JSON object, and whatever keys the prompt asks for are the keys that come back. The code does not know the list of fields in advance.
+
+That means a prompt can define both sides of the interface:
+
+```text
+You are analysing a debt-collection call transcript.
+
+INPUT VARIABLES (given to you as context)
+- call_date: the date the call took place
+- customer_name: the customer's name, if known
+
+OUTPUT VARIABLES (return exactly one JSON object)
+- disposition_category: RPC | WPC | NC
+- disposition_name: one allowed name for that category
+- disposition_date: YYYY-MM-DD, only if the customer named a date
+- call_summary: two sentences, neutral tone
+- payment_intent: HIGH | MEDIUM | LOW | NONE
+- customer_escalation_flag: true only if explicitly stated
+
+Rules: use only what the customer said. If it is unclear, choose
+the lower-confidence value. Never invent a date.
+```
+
+And the model answers with something like:
+
+```json
+{
+  "disposition_category": "RPC",
+  "disposition_name": "PTP",
+  "disposition_date": "2026-04-14",
+  "call_summary": "Customer agreed to pay the pending EMI on the 14th.",
+  "payment_intent": "HIGH",
+  "customer_escalation_flag": false
+}
+```
+
+### Variables are not fixed
+
+Input variables and output variables are whatever the prompt says they are. A client who cares about a customer's stated reason adds an output variable called `non_payment_reason` and describes it. A client who wants the customer's sentiment adds `sentiment`. Neither change touches the backend.
+
+This is the same idea I use when configuring voice agents. An agent has variables too: each one has a name, a direction (input or output), an optional default, and, for outputs, a plain-language instruction describing how to work the value out from the conversation. Auto-disposition prompts follow the same pattern. You declare what goes in, describe what should come out, and the system carries the values through. A prompt for a new use case can be created the same way an agent is, without waiting for a release.
+
+## Storing Outputs Without a Schema Per Field
+
+Dynamic outputs raise a storage question. If any prompt can return any keys, you cannot have a column for each.
+
+The answer is to split the result in two:
+
+```javascript
+const DIRECT_COLUMNS = new Set([
+  "disposition_category",
+  "disposition_name",
+  "disposition_date",
+  "call_summary",
+]);
+
+function mapAiResultToDisposition(aiResult) {
+  const direct = {};
+  const output_variables = {};
+
+  for (const [key, value] of Object.entries(aiResult)) {
+    if (DIRECT_COLUMNS.has(key)) direct[key] = value;
+    else output_variables[key] = value;
+  }
+  return { ...direct, output_variables };
+}
+```
+
+A few fields that every report and filter uses are real columns, so they are fast to query and easy to index. Everything else lands in a JSON column. A new variable shows up in the data the moment a prompt starts returning it, and no migration is needed.
+
+## Keeping the Model Honest
+
+A flexible contract only works if the system around it is careful.
+
+**Constrain the vocabulary in the prompt.** Where a field has a fixed set of values, such as the category, the prompt lists them. The more precisely a rule is written, the more consistent the model is. Rules like "use only what the customer said" and "when unclear, pick the lower value" do a lot of work.
+
+**Ask for JSON explicitly.** The request uses the model's JSON output mode, so the response is always parseable. It guarantees valid JSON, not a particular shape, which is why unknown keys are handled generically rather than assumed away.
+
+**Retry, then fail visibly.** The language model call is attempted up to three times. If it still fails, the disposition moves to an error state with the message attached, so an operator can see what happened.
+
+**Track the cost.** Every disposition records the model, the input and output tokens, and the resulting cost, converted into the local currency. At this volume, a feature that cannot say what it costs per call is a feature nobody can safely scale.
+
+## What I Learned
+
+**1. Make the recording the source of truth.** Everything downstream becomes derivable, repeatable and auditable.
+
+**2. Treat queue delivery as at-least-once.** Idempotency checks at every stage are not optional.
+
+**3. Let the prompt define the interface.** When the business owns the prompt, the business can add a field today instead of next sprint.
+
+**4. Keep the stable parts stable.** A small number of columns for what everyone queries, and flexible storage for the rest.
+
+**5. Context improves recognition.** Telling the speech model what kind of call it is hearing improved transcripts more than I expected.
+
+## What I Would Build Next
+
+- **Schema validation on the output.** JSON mode guarantees valid JSON. A validation step per prompt would reject answers that are well formed but wrong, such as a category that does not exist.
+- **Prompt versioning.** Storing which prompt version produced each disposition would make results comparable over time.
+- **Human review for low-confidence calls.** Route unclear outcomes to a person, and feed the corrections back into the prompt.
+
+## Final Thoughts
+
+Auto-disposition looks like a transcription feature with a classification step on the end. In practice it is a workflow problem: moving audio through unreliable stages, never losing a recording, and producing output the business can use.
+
+The design choice I would repeat is letting the prompt define the variables. It moved the most volatile part of the system, what we want to know about a call, out of the code and into something the people who understand the business can change.
+
+The broader lesson is that **when requirements change often, put the contract where it is cheapest to change, and build the rest of the system to carry whatever it describes.**

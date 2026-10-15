@@ -1,0 +1,169 @@
+---
+title: "Building an AI Voice Calling Platform: Telephony, Streaming Speech Pipelines, and Making Conversations Feel Natural"
+date: "2026-07-20"
+summary: "How an outbound AI voice agent works end to end: telephony providers, a streaming STT, LLM and TTS pipeline, and the many small decisions that decide whether a call feels natural or robotic."
+tags: ["Node.js", "LiveKit", "Voice AI", "Telephony", "Speech-to-Text", "Text-to-Speech", "Real-Time Systems"]
+---
+
+**Topics:** Node.js, LiveKit, Voice AI, Telephony, Speech-to-Text, Text-to-Speech, Real-Time Systems
+
+A chatbot can take two seconds to answer and nobody minds. A phone call cannot.
+
+On a call, a one-second pause feels like a dropped line. Talking over the agent feels rude. A voicemail greeting that gets treated as a customer is embarrassing. And every one of these has to work over a narrow-band phone line, in Indian languages mixed with English, across several telephony carriers.
+
+I worked on the voice calling service of an AI collections platform: a Node and TypeScript backend that places outbound calls and holds a live conversation through a configurable AI agent. This post walks through how it works, and the decisions that matter more than the model itself.
+
+In this post:
+
+- How a call starts and how audio flows through the system
+- The speech pipeline: STT, LLM and TTS as swappable parts
+- Handling interruptions, noise and echo
+- Making synthesized speech sound right
+- Measuring where the dead air comes from
+- Voicemail, silence and the other ways calls go wrong
+- Extraction after the call, and running this in production
+
+## The Problem: Latency and Naturalness Are the Product
+
+A voice agent is judged in the first few seconds. If it greets late, mishears the customer or replies over them, people hang up.
+
+The hard part is not any one model. It is the whole chain:
+
+```text
+Caller speaks
+   -> phone network
+   -> speech-to-text
+   -> language model
+   -> text-to-speech
+   -> phone network
+   -> Caller hears
+```
+
+Every hop adds delay, and every hop can fail in a way the caller can hear. So the system has to be built around that chain, not just around a prompt.
+
+## How a Call Starts and How Audio Moves
+
+The service is an Express API with Postgres for data and Redis for dial counters. Several telephony providers are supported behind one interface, so adding a provider is a contained change rather than a rewrite.
+
+Placing a call follows a simple shape:
+
+1. A campaign scheduler picks a lead and asks the service to initiate a call.
+2. The service asks the chosen telephony provider to dial, and passes a WebSocket URL for the media stream.
+3. A call history record is created immediately, so even a call that fails to connect is accounted for.
+4. When the customer picks up, the provider connects to that WebSocket and starts streaming audio.
+
+From then on, each call has its own **session object** holding all of its state. The handler that receives connections keeps only a map of sessions and the public entry points. Keeping per-call state out of shared singletons is what makes it safe to run many calls at once in one process.
+
+Phone audio arrives as compressed 8 kHz µ-law frames. The service decodes them, feeds them into a voice pipeline, and encodes the generated speech back into the same format. Each provider has its own message shape for sending audio and for stopping it, so those differences live in small adapter functions rather than throughout the code.
+
+## The Speech Pipeline: Swappable by Design
+
+The conversation runs on LiveKit's agents framework, which models a voice agent as three streaming stages:
+
+- **Speech-to-text** turns the caller's audio into text as they speak.
+- **A language model** decides what to say, and can call tools.
+- **Text-to-speech** turns that text into audio, ideally before the model has finished writing it.
+
+Each stage is a plug-in point. The platform supports multiple providers for speech recognition, several language models, and different voices and engines for speech synthesis, chosen per agent through configuration. That matters for Indian languages, where the best recogniser or voice for one language is not the best for another.
+
+Each stage is also wrapped in a small custom node. Those wrappers are where most of the behaviour described below lives: filtering transcripts before they reach the model, recording what the model generated, and cleaning text before it reaches the voice.
+
+## Interruptions, Noise and Echo
+
+Most of the engineering effort went into the moments when the conversation is not a clean turn-taking exchange.
+
+**The greeting must not be cut off.** Callers talking over the opening line, or line noise at pickup, kept truncating it and leaving people unsure anyone was there. The first message is now played with interruptions disabled, so it always plays out in full.
+
+**Noise is not speech.** In practice, even pure noise gets transcribed with fairly high confidence, while real speech scores noticeably higher. The pipeline treats transcripts below a confidence threshold as noise and never sends them to the model. Each dropped transcript is still recorded in the call history with its reason, so when the agent stayed silent, the log explains why.
+
+**The agent must not answer its own echo.** Audio is sent to the phone network faster than real time, because the carrier buffers it. If "playback finished" is reported when the last frame is sent, the agent believes it is listening seconds early, hears its own voice coming back, and answers it, stacking replies on top of audio that is still playing. The fix was to report playback as finished when the caller has actually heard it, with a small allowance for network jitter, and to drop transcripts that arrive while the agent is speaking or within a short echo window.
+
+**Interrupting must actually stop the audio.** Audio already buffered at the carrier cannot be paused, only cleared. Declaring a pause capability the system could not honour made the agent keep talking over the caller. Each provider also expects a different "clear buffered audio" message, and sending the wrong one silently does nothing. The fix was to support clearing only, and to build the correct clear message for each provider.
+
+**Ambient sound.** A faint background bed is mixed under the outbound audio, so the line never goes dead-silent between sentences.
+
+## Making Synthesized Speech Sound Right
+
+The text a language model writes is not always the text a voice should read.
+
+A small normalizer sits between the model and the voice, and it only touches the audio path. It rewrites things the voice would otherwise mangle:
+
+- A numeric date like `06/06/2026` becomes "6 June 2026", instead of being read digit by digit.
+- Currency amounts are written in the form the voice reads correctly.
+- Hindi sentence-end marks become full stops, so streaming speech can start before the model has finished the sentence.
+- Markdown symbols, emoji and stray special characters are removed.
+
+The transcript and the model's context keep the original text. Only what is spoken is cleaned.
+
+**Caching speech.** Agents say the same things repeatedly: greetings, confirmations, standard questions. Synthesizing them every time costs money and adds latency. Synthesized audio is cached, keyed by everything that affects the sound: provider, model, voice, sample rate and text. A database row is the source of truth for whether an entry exists, and the audio bytes live in object storage. The audio is written first and the row only afterwards, so a row can never point at audio that is missing.
+
+## Measuring Where the Dead Air Comes From
+
+"The agent feels slow" is not something you can fix. "The language model's first token arrives 900 ms after the transcript" is.
+
+A per-turn latency tracker timestamps every hop of a turn: the first partial transcript, the final transcript, the request to the model, the first and last tokens, the first text pushed into the voice, and the first audio back. When a call has a pause, the log shows which stage it belongs to, instead of leaving it to guesswork from aggregate metrics.
+
+That measurement paid for itself. One source of dead air turned out to be a tool that updated call variables during the conversation, forcing a silent extra model call on every turn. Moving that work to after the call, from the final transcript, removed it from the speech path entirely.
+
+## Tools That Do the Maths
+
+Language models are unreliable at date arithmetic. When an agent needs to turn "next Friday" or "in two weeks" into a real date, or work out how many days a payment is overdue, it should not guess.
+
+So the agent is given small deterministic tools:
+
+- A **date tool** that resolves relative expressions like "tomorrow" or "last day of the month" into a concrete date in the local time zone, and refuses dates too far in the future.
+- A **days-past-due tool** that computes the number of overdue days from a due date.
+
+The model decides *when* to call a tool. The code does the arithmetic. Agents can also be given their own configured tools, run through the same mechanism.
+
+## The Ways Calls Go Wrong
+
+A production voice system is mostly handling cases that are not the happy path.
+
+**Silence.** If the caller says nothing, the agent waits, then prompts, and after a configured number of attempts, ends the call. The timer checks that the caller is not speaking and that the agent has finished its own turn, so it never prompts in the middle of someone's sentence.
+
+**Voicemail.** Calls often reach a voicemail greeting or a carrier announcement. Detection uses phrase lists built from real transcripts, split into two groups. Some phrases, such as "after the tone", can appear at any point, because a call can be forwarded to voicemail midway. Others, such as "the number you have dialed", are only checked in a short window after pickup, because a live customer might plausibly say something similar mid-conversation. Only phrases no real person would say go in the always-on list. When voicemail is detected, the agent speaks a short reminder directly through the voice, with no model involved, and hangs up, bounded by a timeout so a voicemail box that cuts off cannot hold the session open.
+
+**Call end.** Closing phrases and silence timeouts both end the call through one shared path, so teardown is consistent however a call finishes.
+
+## After the Call
+
+When the call closes, the transcript is final, and that is when expensive work runs.
+
+Built-in values such as detected language, and any client-defined output variables, are extracted from the transcript. Each configured variable is its own model call carrying only its own prompt. That isolation is deliberate: one badly written prompt cannot influence another client's variable, and one malformed answer ruins one field rather than all of them. The transcript is sent with every request on purpose, because identical prefixes are served from the provider's prompt cache at a fraction of the price, and the first request runs alone so the cache is warm before the others fan out.
+
+Extraction is bounded by a total time budget, and it never throws. Anything that does not finish falls back to its configured default, because a failure here must never stop a call from completing.
+
+Costs are recorded per call, covering speech recognition, the model, voice synthesis and telephony, and attached to the call history. If you cannot see what a call costs, you cannot tell whether the platform is viable.
+
+## Running It in Production
+
+Some operational details only show up once real traffic does.
+
+**Draining for deploys.** A deploy must not kill live calls or start new ones that will be cut off. When the service is draining, it refuses to start new calls. The caller of that function catches the error and reschedules the lead a minute later, so it is picked up by the new process after boot instead of being lost.
+
+**Schema discipline.** Database changes go through ordered migrations rather than automatic syncing, which let environments drift apart.
+
+**Everything is tested where it is pure.** Text normalizers, date logic and language detection are plain functions with unit tests. The parts that depend on live audio are exactly the parts that need the most logging.
+
+## What I Learned
+
+**1. Latency is a product feature.** Measure every hop, and attribute delay to a stage before trying to fix it.
+
+**2. Never trust the transcript blindly.** Confidence thresholds, echo windows and dropped-transcript logging turn a noisy channel into something a model can handle.
+
+**3. Respect the physics of the network.** Buffered audio, carrier differences and jitter are not edge cases. They decide whether an interruption works.
+
+**4. Keep the speech path lean.** Anything that can happen after the call should happen after the call.
+
+**5. Let code do what code does well.** Dates, arithmetic and validation belong in tools, not in the model's head.
+
+**6. Plan for failure first.** Silence, voicemail, noise, provider errors and deploys are the normal operating conditions of a phone system.
+
+## Final Thoughts
+
+A voice agent is easy to demo and hard to run. The demo needs a good prompt. The product needs the surrounding system: a pipeline that streams, a session model that isolates calls, guards that keep noise away from the model, and tools and fallbacks for every way a real call can go sideways.
+
+The models get most of the attention, but a large share of what makes a call feel natural is ordinary engineering: buffering, timing, caching and careful state.
+
+The broader lesson is that **a conversation feels natural when a hundred small failure cases are handled quietly. The caller never notices them, and that is the point.**

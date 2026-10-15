@@ -1,0 +1,187 @@
+---
+title: "Building AI-Powered Two-Way WhatsApp Conversations: Tool Calling, Structured Dispositions, and Backend Validation"
+date: "2026-10-15"
+summary: "How an AI agent answers WhatsApp replies and records a structured outcome for every conversation, using forced tool calls, a server-side conversation, and guardrails around the model."
+tags: ["Node.js", "OpenAI", "AI Tool Calling", "WhatsApp Business API", "Workflow Automation", "Conversational AI"]
+---
+
+**Topics:** Node.js, OpenAI, AI Tool Calling, WhatsApp Business API, Workflow Automation, Conversational AI
+
+Sending a WhatsApp campaign is one half of the job. The other half starts when the customer replies.
+
+One customer says they will pay on Friday. Another says they already paid. A third asks why they keep getting messages. Each reply needs a sensible answer, and each conversation needs a recorded outcome that the rest of the business can act on.
+
+I worked on the part of a WhatsApp platform that handles those replies: it receives an incoming message, lets an AI agent respond, and at the same time turns the conversation into structured data. This post walks through how that flow works and the guardrails that keep it dependable.
+
+In this post:
+
+- How an incoming reply finds its campaign, agent and conversation
+- Keeping conversation memory without storing a transcript ourselves
+- Using two forced steps of tool calling: classify first, then reply
+- Turning free-text conversations into a structured disposition
+- Guardrails: paused campaigns, non-text messages, failures and fallbacks
+- What the downstream system does with the result
+
+## The Problem: A Reply Has to Do Two Jobs
+
+A reply handler has to do two very different things at once.
+
+**Talk.** Produce a natural, on-brand answer in the customer's context.
+
+**Record.** Capture the outcome in a form software can use: Did they promise to pay? Are they upset? Is this the right person? Did they ask not to be contacted?
+
+A system that only talks leaves operators reading transcripts. A system that only classifies feels robotic. The goal was a single flow that does both, with the AI interpreting and the backend deciding.
+
+## From Webhook to Conversation
+
+When a customer replies, the WhatsApp provider calls a webhook with the message text, the customer's number, the business number that received it, and the message type.
+
+The handler then works through a chain of lookups before the AI is involved at all:
+
+```text
+Incoming reply (webhook)
+        |
+        v
+Normalize phone numbers
+        |
+        v
+Find the active lead for this mobile  -->  its campaign
+        |
+        v
+Does the campaign's sending number match
+the number the customer replied to?
+        |
+        v
+Is the campaign paused?
+   yes -> store the message only, no AI reply
+   no  -> continue
+        |
+        v
+Load the agent and its prompt
+        |
+        v
+Find the active conversation (or create one)
+        |
+        v
+Generate and send the reply
+```
+
+Two of those checks are easy to overlook and matter a great deal.
+
+**The number match.** A customer may be a lead in one campaign and reply to a different business number. The handler verifies that the reply arrived on the number the campaign actually sends from, and rejects it otherwise. Without that check, a reply could be answered by the wrong agent with the wrong prompt.
+
+**The paused-campaign rule.** A paused campaign keeps *receiving* messages, because customers do not stop writing when a campaign stops, but the AI does not answer. The message is stored so a human can see it, and nothing is sent. Pausing a campaign therefore means what an operator expects it to mean.
+
+## Keeping Context Without Building a Memory System
+
+A message like "Please call me next week" means different things depending on what came before. The model needs history.
+
+Rather than store and resend the transcript on every turn, the conversation lives on the model provider's side, in a server-side conversation. Our database keeps only a reference to it, saved in the conversation's metadata. Each new reply continues that same conversation.
+
+This keeps the integration small. The application stores messages for its own purposes, such as showing them to operators and reporting on them, but it is not responsible for rebuilding the model's memory.
+
+The agent's prompt can also refer to customer details through variables. When the reply is generated, those markers are resolved from two sources. The agent can have default values for each variable, and the uploaded data for the specific lead overrides them. If both exist, **the lead's real data wins.** That rule is simple, but it prevents the embarrassing case where a default stands in for something the system actually knows.
+
+## Two Forced Steps: Classify, Then Reply
+
+This was the most important design choice. Instead of asking the model for a reply and hoping it also remembers to record the outcome, each incoming message goes through two distinct calls.
+
+**Step 1: classify, with the tool required.** The first call offers a single tool, a disposition extractor, and requires the model to call it. The model cannot skip it or answer in prose. The conversation is analysed and the result comes back as structured arguments.
+
+**Step 2: reply, with no tool forced.** The second call produces the text the customer will see. By default no tool is offered, so an ordinary reply can never be derailed into a function call. If the agent has its own configured tools, they are made available as optional, and if the model calls one, the backend runs it and then forces a plain-text reply with no further tool rounds.
+
+Simplified, the shape is:
+
+```javascript
+// 1. Classification: the tool call is mandatory
+const first = await createResponse(input, conversationId, chatTools, "required");
+const disposition = parseToolArguments(first); // structured values
+
+// 2. Reply: plain text unless the agent has its own tools
+let reply = await createResponse(toolOutputs, conversationId, extraTools,
+                                 extraTools.length ? "auto" : "none");
+
+if (reply.hasToolCalls && extraTools.length) {
+  const outputs = await runToolsOnBackend(reply.toolCalls);
+  // One round only, then force text.
+  reply = await createResponse(outputs, conversationId, extraTools, "none");
+}
+```
+
+A few details make this robust:
+
+- **Parallel tool calls are turned off**, so the order of operations is predictable.
+- **Tool use is bounded.** After a custom tool runs once, the model must answer in text. There is no open-ended loop.
+- **The backend executes tools, not the model.** The model proposes a call. The server decides whether and how to run it.
+
+That last point is the principle behind the whole design: the model can suggest, but the application remains in charge.
+
+## Turning Natural Language into a Structured Disposition
+
+A disposition is the recorded outcome of a conversation. In a collections context it answers questions like: Who did we reach? What did they commit to? How do they feel about it?
+
+The extraction tool defines a schema with a fixed vocabulary:
+
+- A **category** describing who was reached, such as the intended customer, a wrong person, or no meaningful conversation.
+- A **name** chosen from an allowed list for that category, such as a payment promise, a request for a follow-up, a request not to be contacted, or a dispute.
+- Signals like **payment intent level**, **promise strength**, **sentiment** and a **non-payment reason**.
+- Boolean **flags**, for example an escalation or a foreclosure request.
+- An optional **date** the customer mentioned.
+
+Most of the quality here lives in the tool's description, which doubles as a rubric. It tells the model to use only the customer's own words, to prefer the lower value when evidence is unclear, and to set flags only when something is explicitly stated. A calm explanation of a job loss, for example, is not the same as distress, and the rubric says so.
+
+Constraining outputs to enumerated values matters as much as the rubric. The model cannot invent a new category. It picks from the ones the application understands.
+
+The result is that an unstructured reply like "I'll pay on the 15th, but please stop calling in the morning" becomes a set of values the system can store, filter and report on.
+
+## What the Backend Does with the Result
+
+The structured values are saved alongside the messages, and the tool calls themselves are kept in the message metadata so a conversation can be audited later.
+
+On the CRM side, the result is split by purpose. A handful of fields are important enough to be first-class columns: the category, the name, the date and the escalation and foreclosure flags. Everything else goes into a flexible JSON field. That split keeps filtering and reporting fast for the fields everyone queries, while leaving room for new signals without a schema change.
+
+Certain tools are also treated as *routing* tools. When one is called, the backend can recognise it and branch, rather than treating every tool result as just another field to store.
+
+Dispositions that carry a date, such as a promise to pay on a certain day, feed the CRM's follow-up records. That lets the business later look at customers by promise status, for example those whose promises were broken, and decide whom to contact next.
+
+## Guardrails Around the Model
+
+Most of the reliability in this flow comes from the code around the AI, not the AI itself.
+
+**Non-text messages bypass the model.** If a customer sends an image, a document or a voice note, the handler sends a configured canned reply instead of asking the model to interpret something it cannot see.
+
+**Failures degrade gracefully.** If the model call fails, the handler does not leave the customer in silence. If the agent has a configured fallback message, it is sent directly, with no AI involved. There is deliberately no hard-coded default text: an agent that has not configured one simply logs the error, and the team decides what a safe message is.
+
+**Provider errors are checked.** Sending a reply returns a result, and a failure is logged rather than assumed to have succeeded.
+
+**Prompts are validated.** An agent without a prompt is a configuration error and is rejected up front, rather than discovered mid-conversation.
+
+## Handling Asynchronous Reality
+
+Conversations are events arriving at unpredictable times, which creates problems that never show up in a demo.
+
+**Duplicate conversations.** Two near-simultaneous events, or a retry, can try to create a conversation for the same customer. We saw this in practice. The fix was to create a conversation only when an inbound message arrives, and to track a status on each message so a duplicate creation could be detected and handled.
+
+**Replies that race the AI.** A customer can reply again while the previous reply is still being generated. Because the conversation is a single ongoing thread on the provider side, and messages are stored with their own state, each reply is handled in order rather than trampling the last.
+
+**Retries from the provider.** Webhooks can be delivered more than once. Treating message handling as something that must be safe to repeat, and tracking message state, keeps a retry from producing a second reply.
+
+## What I Learned
+
+**1. Separate interpretation from execution.** The model decides what a message means. The backend decides what happens. Never let free text act directly on your data.
+
+**2. Force the structured step.** If an outcome must be recorded every time, require the tool call instead of hoping the model volunteers it.
+
+**3. Constrain the vocabulary.** Enumerated values and a precise rubric turn a language model into a reliable classifier.
+
+**4. Design the failure path first.** Paused campaigns, unsupported media, provider errors and model failures each need an explicit, boring behaviour.
+
+**5. Let the model own memory, and the app own the record.** A server-side conversation keeps context cheap, while the application stores what it needs for operators and reporting.
+
+## Final Thoughts
+
+An AI that chats on WhatsApp is the visible part. The harder and more valuable part is everything that makes its output trustworthy: matching the reply to the right campaign, bounding what the model can do, recording a validated outcome, and failing safely.
+
+The model handles language. The application handles consequences. Keeping that line clear is what lets the system answer thousands of conversations while leaving behind clean, usable data.
+
+The broader lesson is that **reliable AI automation is not about getting a good reply. It is about turning every reply into the right application behaviour, with the right checks, even when something goes wrong.**

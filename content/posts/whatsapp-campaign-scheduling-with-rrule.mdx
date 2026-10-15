@@ -1,0 +1,349 @@
+---
+title: "Scheduling Recurring WhatsApp Campaigns with RRULE: Keeping Schedules, Jobs, and Campaign State in Sync"
+date: "2025-11-15"
+summary: "How a WhatsApp campaign platform schedules recurring campaigns with RRULE, supports multiple providers with synced templates, and validates everything again before a single message is sent."
+tags: ["Node.js", "RRULE", "Scheduling", "WhatsApp Business API", "Agenda", "Multi-Provider Integration", "Workflow Automation"]
+---
+
+**Topics:** Node.js, RRULE, Scheduling, WhatsApp Business API, Agenda, Multi-Provider Integration, Workflow Automation
+
+Sending a WhatsApp message is easy. Sending the right message to the right audience at 10:00 every weekday, and again at 4:00 PM, and then stopping when the campaign is paused, is a scheduling problem.
+
+I worked on the scheduling side of a WhatsApp campaign platform used for customer communication. The interesting part was not any single feature. It was keeping three things consistent with one another: the schedule a user configured, the job queue that fires campaigns, and the state the campaign is in at any moment.
+
+In this post:
+
+- Why a recurring schedule needs its own representation
+- Building RRULE strings from a simple campaign form
+- The three-service loop that fires a campaign and schedules the next run
+- Supporting multiple WhatsApp providers, and why adding one is cheap
+- Syncing templates, bulk-assigning them with a CSV, and auto-filling their variables
+- Validating a template's category before every execution
+- Executing a large campaign without blocking the scheduler
+- The bugs and design rules that came out of it
+
+## The Problem: One Send Is Easy, a Schedule Is Not
+
+A campaign can be configured in several ways:
+
+- Run **once** at a specific date and time.
+- Run **daily**, optionally several times a day.
+- Run **weekly** on selected weekdays.
+- Run **monthly** on selected dates.
+
+A one-time campaign is just a timestamp. A recurring one is a pattern, and a pattern raises questions a timestamp never does. When is the next run? What happens after a run finishes? What happens if the campaign is edited, paused or deleted while a run is already queued?
+
+If scheduling is treated as an afterthought, the answers end up scattered across the UI, the database and the job queue, and they drift apart.
+
+## Representing a Schedule with RRULE
+
+Instead of inventing a custom format, the platform stores each recurring schedule as an **RRULE**, the recurrence-rule format from the iCalendar standard. I used the `rrule` library to build and evaluate them.
+
+The campaign form collects a small set of inputs:
+
+- Frequency: daily, weekly or monthly
+- One or more send times
+- Weekdays (for weekly) or dates of the month (for monthly)
+- A start date
+
+A builder function turns those into a single string stored on the campaign. Each send time becomes its own rule, and the rules are combined into one set:
+
+```javascript
+export function buildRecurrenceString(input) {
+  const ruleSet = new RRuleSet();
+  const dtstart = new Date(input.startDate);
+  dtstart.setUTCHours(0, 0, 0, 0);
+
+  input.times.forEach(({ hour, minute = 0 }) => {
+    // Users pick times in IST; the engine works in UTC.
+    const utc = convertISTtoUTC(hour, minute);
+
+    ruleSet.rrule(
+      new RRule({
+        freq: FREQUENCY[input.frequency],
+        interval: input.interval || 1,
+        dtstart,
+        byhour: [utc.hour],
+        byminute: [utc.minute],
+        // weekly -> byweekday, monthly -> bymonthday
+      })
+    );
+  });
+
+  return normalize(ruleSet.toString()); // one DTSTART, many RRULE lines
+}
+```
+
+For a daily campaign at 10:00 and 16:00 IST, the stored value looks roughly like this (illustrative):
+
+```text
+DTSTART:20261020T000000Z
+RRULE:FREQ=DAILY;INTERVAL=1;BYHOUR=4;BYMINUTE=30
+RRULE:FREQ=DAILY;INTERVAL=1;BYHOUR=10;BYMINUTE=30
+```
+
+Two small decisions here paid off:
+
+**Convert time zones once, at the edge.** Users think in local time, the engine runs in UTC. Doing the conversion in exactly one place means nothing downstream has to guess which zone a time is in.
+
+**Normalize the output.** Combining several rules produces repeated `DTSTART` lines. Keeping one `DTSTART` and the rule lines makes the string stable and easy to parse later.
+
+A one-time campaign simply stores no recurrence string at all. That absence is meaningful, and the execution logic relies on it later.
+
+## Configured, Due, Executed: Three Different Things
+
+The most useful mental model I took from this work is that these states are not interchangeable:
+
+**Configured campaign ≠ Due campaign ≠ Executed campaign**
+
+The campaign record keeps them apart with separate fields:
+
+- A **status** (for example active or deactivated) says whether the campaign is allowed to run at all.
+- A **next execution date** says when it is next due.
+- A **previous execution date** says when it last ran.
+
+When a campaign is created, the next execution date is computed immediately as the earliest valid occurrence after the start date. A campaign scheduled for tomorrow is active and configured, but not due. Mixing those up is how a scheduled campaign ends up displayed as a draft, or a paused one ends up running.
+
+## The Three-Service Loop
+
+Scheduling is split across three responsibilities.
+
+**1. The CRM backend** owns the campaign: its RRULE, status and execution dates. It is the source of truth.
+
+**2. A separate scheduler service** owns the job queue. It uses Agenda, a MongoDB-backed job scheduler, and keeps one job per campaign.
+
+**3. The CRM's execute endpoint** does the actual work when a job fires.
+
+They cooperate in a loop:
+
+```text
+Create / activate / edit campaign (CRM)
+            |
+            |  notify: { id, status, next_execution_date }
+            v
+Scheduler: cancel old job, schedule new job at next_execution_date
+            |
+            v   (time arrives)
+Scheduler calls CRM execute endpoint
+            |
+            v
+CRM: check status is active
+     compute next occurrence from the RRULE
+     save next_execution_date  (before sending)
+     start the send in the background
+     return { next_execution_date }
+            |
+            v
+Scheduler: schedule the next job from that date
+           (or cancel it, if there is none)
+```
+
+A few properties of this design are worth calling out.
+
+**The scheduler never calculates recurrence.** It only knows a date. The CRM, which owns the RRULE, tells it when to run next. That means recurrence logic lives in exactly one place.
+
+**Scheduling a job is an upsert.** Before creating a job for a campaign, the scheduler cancels any existing one. Editing a campaign, deactivating it or deleting it all go through the same path, and a stale job can never survive alongside a new one. A missing next date simply means the job is cancelled and nothing is queued.
+
+**A date in the past runs immediately.** If the scheduler is told a campaign was due earlier, it schedules it for now rather than dropping it.
+
+**The execute endpoint re-checks status.** Even if a job fires, the CRM skips the run unless the campaign is still active. The queue is a trigger, not an authority.
+
+## Many Providers, One Campaign Model
+
+A WhatsApp campaign does not talk to WhatsApp directly. It goes through a business solution provider, and a real platform ends up with more than one. Different clients have different provider accounts, and each account is tied to a WhatsApp Business Account, a WABA ID.
+
+I did not want "which provider is this?" to be a question every feature had to answer. So the platform keeps it in one place:
+
+- A **connector** record stores a provider, its credentials and its WABA ID.
+- Every template records the WABA ID it belongs to.
+- When a campaign runs, the provider is **derived from the template's WABA ID**. Nobody picks it by hand, so a campaign cannot be pointed at the wrong provider by accident.
+
+After that, the provider-specific part is a small adapter. Each provider needs to answer the same handful of questions: how do I fetch your templates, how do I build a message payload, how do I send it, and how do I look a template up to validate it. The campaign engine calls them through a single switch:
+
+```javascript
+async function sendMessageByProvider(provider, customer, template, ctx) {
+  switch (provider) {
+    case PROVIDER.ICS:
+      return sendIcsMessage(buildIcsPayload({ customer, template }), ctx);
+    case PROVIDER.VALUEFIRST:
+      return sendSms(buildSmsPayload({ customer, template }), ctx);
+    default:
+      throw new Error(`Unsupported provider: ${provider}`);
+  }
+}
+```
+
+Everything above that switch, which is scheduling, batching, retries, status handling and the RRULE logic, does not know or care which provider is in use. That is why adding a provider is a contained piece of work:
+
+1. Add the provider to the enum.
+2. Add a connector with its credentials and WABA ID.
+3. Write its adapter: fetch templates, build the payload, send, look up a template.
+4. Add one `case` to each switch.
+
+The scheduler, the job queue and the campaign lifecycle do not change at all.
+
+## Syncing Templates Instead of Typing Them
+
+WhatsApp templates are created and approved at the provider, so the platform needs its own copy: the name, the body, the language, the category and the variables. Copying that by hand is slow and error-prone, so templates are **synced**.
+
+The sync works from the connectors:
+
+```text
+For each connector (provider + credentials + WABA ID):
+    fetch its templates from the provider's API
+    tag every template with the connector's WABA ID
+Combine everything, then for each template:
+    take the BODY text, language and category
+    work out the variables (see below)
+Bulk insert, updating the category on duplicates
+```
+
+Providers are synced side by side and settled independently. One provider being down does not stop another provider's templates from syncing, and a template that cannot be formatted is logged and skipped rather than failing the whole run.
+
+Because the sync reads from the connector table, **onboarding a new account is mostly data**: add its WABA ID and credentials as a connector and run the sync. Its templates appear, already tagged with the right account.
+
+### Bulk-assigning templates with a CSV
+
+New accounts arrive with a lot of templates, and each one has to be assigned to the client it belongs to. Doing that one template at a time does not scale.
+
+So there is a bulk upload. An admin uploads a CSV with a template ID and a client per row, and the server streams it, row by row, and assigns each template. The upload is built to be forgiving and informative:
+
+- Headers are trimmed and lowercased, and values are trimmed, so a messy spreadsheet still works.
+- Each row is validated on its own. A missing template ID, a missing client or an unknown template is recorded against that row.
+- One bad row never aborts the file. The response gives a summary of rows processed, updated, not found and failed, plus the first failures with their row numbers.
+
+The workflow for a new account therefore becomes: add the connector with its WABA ID, run the sync, upload one CSV. That replaces what used to be dozens of manual edits.
+
+### Auto-filling variables from the template's example values
+
+Every WhatsApp template with placeholders has to say what each one means. Template one might use `{{1}}` for the customer's name and `{{2}}` for their EMI amount. Mapping each placeholder to a database field is tedious, and repeating it for hundreds of templates is worse.
+
+The provider's API already returns something useful. For every template, the body includes an **example**: sample values for each placeholder, which the provider requires when a template is submitted.
+
+I took advantage of that. When a template is created, the example values are written using the same names as the columns in my customer table. For example, the sample for the second placeholder is literally `loan_emi`. During sync, each example value is looked up in a table of known variables, and a match pre-fills the mapping:
+
+```javascript
+// Body example from the provider: [["name", "loan_emi", "due_date"]]
+const variables = Object.fromEntries(
+  exampleValues.map((value, i) => [
+    `v${i + 1}`,
+    resolveTemplateVariablePrefill(value), // looks the name up in known variables
+  ])
+);
+// -> { v1: { value: "name" }, v2: { value: "loan_emi" }, v3: { value: "current_month_due_date" } }
+```
+
+A few details make this work well:
+
+- Because the example names match my column names, the mapping needs **no extra configuration**. The provider's own payload carries the mapping.
+- Some variables are **derived**, not stored. Days past due, for example, is calculated from a due date at send time, so the lookup table records which function to use.
+- A few variables carry a **format**, such as a day and month for a due date, so the value is presented the way the template expects.
+- Anything the lookup does not recognise is simply left empty for a person to fill in. The auto-fill never guesses.
+- Buttons with dynamic URLs have their own example values, and those are pulled into a separate set of button variables the same way.
+
+The result is that a well-authored template syncs in with its variables already mapped, and a person only reviews the exceptions.
+
+## Validating the Category Before Every Execution
+
+There is one more check I added, and it protects money.
+
+A WhatsApp template has a **category**, such as utility or marketing, and the two are priced very differently. Marketing conversations cost far more than utility ones. A template is created and approved under one category, but the provider is the one that finally decides what it is, and a template's category can change after the fact.
+
+A campaign created against a utility template could therefore end up sending, at marketing prices, a message that was budgeted at utility prices. And it could do it to an entire audience before anyone noticed.
+
+So execution does not trust the stored copy. Before any message is sent, the campaign:
+
+1. Takes the template's name, ID and the category we have on record.
+2. **Fetches the live template from the provider** by name, using that account's credentials.
+3. Compares the live category with the stored one.
+4. If it does not match, or the template cannot be found at all, marks the campaign as **template invalid** and stops. Nothing is sent.
+
+```javascript
+const live = await fetchTemplateByName(template.name, credentials);
+
+if (!live) {
+  mismatches.push({ expected: template.category, actual: "TEMPLATE_NOT_FOUND" });
+} else if (live.category !== template.category) {
+  mismatches.push({ expected: template.category, actual: live.category });
+}
+
+if (mismatches.length) {
+  await markCampaign(campaign.id, "TEMPLATE_INVALID");
+  throw new Error("Template validation failed");
+}
+```
+
+Three things about this are deliberate:
+
+- **It happens on every run, not just at creation.** A recurring campaign can live for months, and the template behind it can change during that time.
+- **It fails closed.** A missing template is treated the same as a changed category: no send.
+- **It is visible.** The campaign moves into a distinct status instead of silently failing, so someone sees it and decides what to do. Re-syncing the templates refreshes the stored category, so continuing is an explicit choice.
+
+It sits naturally beside the other checks that run before a send, such as confirming the campaign is still active and checking each customer has the data a template's variables need. The principle is the same throughout: **verify, immediately before acting, anything whose change would be expensive.**
+
+## Executing a Large Campaign Without Blocking the Scheduler
+
+The first version of execution did the obvious thing: the execute endpoint sent every message and then replied. For small campaigns that was fine. For large audiences, the scheduler's request waited long enough to time out, even though sending was still going on.
+
+The fix was to change the order of operations:
+
+1. Compute and **save the next execution date first**.
+2. **Return it immediately** so the scheduler can queue the next run.
+3. Run the actual send **in the background**.
+
+The scheduler now gets its answer quickly, and a slow send can no longer break the scheduling chain.
+
+The send itself is deliberately bounded. Recipients are processed in batches of 200, and within a batch only a small number of messages are in flight at once. Each message is wrapped so that one failure is recorded rather than thrown, using `Promise.allSettled`, and the results are tallied at the end of the run. A single bad number should never stop the rest of the audience from being messaged.
+
+After sending, the two kinds of campaign diverge:
+
+- A **recurring** campaign records when it ran and keeps the next date it already computed.
+- A **one-time** campaign is marked as completed and its next date is cleared.
+
+That is the point where the missing recurrence string matters. "No recurrence" is how the code knows a campaign is finished after one run.
+
+## What Went Wrong, and What It Taught Me
+
+**One-time campaigns need their own path.** At one point one-time campaigns were not executing. A recurring campaign always has a next date derived from its RRULE, but a one-time campaign has no rule to derive anything from. The execution code now explicitly handles the one-time case, falling back to the scheduled date when there is no recurrence, instead of assuming every campaign behaves like a recurring one.
+
+**Timeouts hide in plain sight.** A request that works for a hundred recipients can quietly fail for a hundred thousand. Anything the scheduler waits on needs to return quickly, with heavy work moved behind it.
+
+**A stored copy of a template is a cache, not the truth.** The provider owns a template's category, and it can change after the campaign was configured. Treating the local copy as authoritative would have meant paying for the difference. Validating against the provider at execution time turns a silent cost problem into a visible status.
+
+**State must have one owner.** Whenever the job queue and the database disagreed, the question was always "who decides?" Making the CRM the single owner of schedule state, and the scheduler a follower of it, removed a whole class of drift.
+
+## Things I Would Harden Further
+
+A system like this is never finished. These are the areas I would keep reinforcing:
+
+- **Idempotent execution.** If a job is delivered twice, the second run should detect that the schedule has already advanced and do nothing.
+- **Recovery for partial sends.** If the process stops halfway through a large audience, there should be a safe way to resume rather than restart.
+- **Observability.** Logging the scheduled time, actual execution time and returned next date for every run makes "why did this not fire?" answerable in minutes.
+
+## What I Learned
+
+**1. Store the pattern, not just the next date.** RRULE gives a standard, well-tested way to describe recurrence, and it removes a lot of hand-written date arithmetic.
+
+**2. Keep scheduling separate from execution.** A queue that decides when, and a service that decides whether and how, are easier to reason about than one component doing both.
+
+**3. Let one service own the truth.** Everything else should derive from it and be able to be rebuilt from it.
+
+**4. Return fast, work later.** Acknowledge the trigger, persist the next state, then do the slow work in the background.
+
+**5. Model "done" explicitly.** One-time and recurring campaigns end differently, and the schedule data should say which is which.
+
+**6. Put the provider behind an adapter.** If the campaign engine never names a provider, adding one is an adapter plus a connector, not a project.
+
+**7. Reuse data the provider already gives you.** The template's own example values carried the variable mapping, once they were named after my database columns.
+
+**8. Validate expensive assumptions at the last moment.** A category can change after a campaign is configured, so it is checked on every run, before anything is sent.
+
+**9. Make bulk operations forgiving and informative.** Row-level errors and a clear summary turn a CSV upload from a gamble into a tool.
+
+## Final Thoughts
+
+Recurring scheduling looks like a small feature on a campaign form: a few dropdowns and a time picker. Behind it is a chain of decisions about representation, ownership and ordering.
+
+RRULE gave the schedule a standard shape. A single owner of campaign state kept the queue honest. Moving the next-date calculation ahead of the slow work kept large campaigns from breaking the loop that makes the next run possible. And treating providers, templates and categories as data to sync and re-verify, rather than assumptions to trust, kept the whole thing cheap to extend and safe to run.
+
+The broader lesson is that **a schedule is not a timestamp. It is a small state machine, and it only stays reliable when every component agrees on who owns each transition.**

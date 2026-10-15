@@ -1,0 +1,193 @@
+---
+title: "Real-Time Messaging from Scratch: WebSockets, Socket.IO, Redis and Pub/Sub"
+date: "2025-08-11"
+summary: "The first step of my real-time journey: the concepts that made WebSockets, Socket.IO and Redis pub/sub click, in the order they helped."
+topic: "Real-Time Systems"
+status: "done"
+sources:
+  - label: "MDN: The WebSocket API"
+    href: "https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API"
+  - label: "RFC 6455: The WebSocket Protocol"
+    href: "https://datatracker.ietf.org/doc/html/rfc6455"
+  - label: "Socket.IO docs: How it works"
+    href: "https://socket.io/docs/v4/how-it-works/"
+  - label: "Socket.IO docs: Using multiple nodes"
+    href: "https://socket.io/docs/v4/using-multiple-nodes/"
+  - label: "Socket.IO docs: Redis adapter"
+    href: "https://socket.io/docs/v4/redis-adapter/"
+  - label: "Redis docs: Pub/Sub"
+    href: "https://redis.io/docs/latest/develop/pubsub/"
+  - label: "Redis docs: Streams"
+    href: "https://redis.io/docs/latest/develop/data-types/streams/"
+  - label: "Redis docs: Data types"
+    href: "https://redis.io/docs/latest/develop/data-types/"
+  - label: "ws: a Node.js WebSocket library"
+    href: "https://github.com/websockets/ws"
+---
+
+This is where the real-time part of my work started. Everything I built later, from [the dialer extension](/articles/real-time-chrome-extension-tata-dialer) to the voice agents in the next note, sits on a handful of ideas. This note is those ideas, in the order they helped me, and not a retelling of what I built with them.
+
+Most of the web is request and response: the browser asks, the server answers, and the conversation ends. That breaks down the moment the **server** needs to speak first, such as a call arriving, a new message, or a status change.
+
+## Why not just poll?
+
+There are a few ways to get fresh data to a browser:
+
+| Approach | How it works | Cost |
+|---|---|---|
+| Polling | Ask again every few seconds | Wasted requests, and delay up to the interval |
+| Long polling | Ask, and the server holds the request open until it has something | Works everywhere, but one HTTP request per message |
+| Server-Sent Events | One long HTTP response the server keeps writing to | One direction only (server to client) |
+| WebSockets | One persistent two-way connection | Needs connection management |
+
+When the client also needs to send, and latency matters, WebSockets are the natural fit.
+
+## WebSockets
+
+A WebSocket starts life as an ordinary HTTP request that asks to be upgraded. The server answers `101 Switching Protocols`, and from then on the same TCP connection carries small **frames** in both directions, with no repeated HTTP headers.
+
+A few properties are worth knowing before you use one:
+
+- **Full duplex.** Either side can send at any time.
+- **Message-based.** You send and receive discrete messages, not a byte stream.
+- **Heartbeats are your problem.** The protocol has ping and pong frames, but nothing forces you to use them. Without them, a connection that has silently died (a phone that changed networks) can look alive for a long time.
+- **No reconnection, no rooms, no acknowledgements.** The browser API gives you `open`, `message`, `error` and `close`, and that is all. If the connection drops, you write the retry logic yourself.
+
+A bare server with the `ws` library is only a few lines:
+
+```javascript
+import { WebSocketServer } from "ws";
+
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on("connection", (socket) => {
+  socket.on("message", (data) => socket.send(`echo: ${data}`));
+});
+```
+
+Writing that, then adding a heartbeat and a reconnecting client by hand, is the fastest way to understand what the next layer is for.
+
+## Socket.IO
+
+Socket.IO is easy to mistake for "WebSockets with a nicer API". It is not. It is its own protocol that **uses** WebSocket as one of its transports.
+
+It has two layers. The low layer (Engine.IO) manages the connection: it starts on HTTP long-polling and upgrades to WebSocket when it can, assigns a session ID, and runs a heartbeat where the server pings every `pingInterval` and expects a pong within `pingTimeout`. The high layer adds what applications actually need:
+
+- **Named events** with payloads, not just raw messages
+- **Acknowledgements**, so a sender can get a reply to a specific emit
+- **Rooms**, to send to a subset of clients
+- **Namespaces**, to multiplex independent channels over one connection
+- **Automatic reconnection** with backoff, and **buffering** of messages while disconnected
+
+Because it is its own protocol, a Socket.IO server only talks to a Socket.IO client. A plain WebSocket client cannot connect to it.
+
+```javascript
+// server
+io.on("connection", (socket) => {
+  socket.join(userId);               // one room per user
+  socket.on("ping-check", (cb) => cb("ok"));   // acknowledgement
+});
+
+io.to(userId).emit("call-started", payload);   // only that user's sockets
+
+// client
+const socket = io(url, { auth: { token } });
+socket.on("call-started", (payload) => showDialog(payload));
+```
+
+**Rooms** are the idea I find most useful. Putting each user in a room named after their ID turns "send this to a specific person, on any of their open tabs" into one line, and it is also how you make sure data only reaches the person it belongs to.
+
+## The problem with more than one server
+
+Everything above works on one server. Run two, behind a load balancer, and two things break.
+
+**1. Sticky sessions.** Socket.IO keeps session state on the server that accepted the connection. If the client starts with long-polling, its requests must keep reaching that same server, so the load balancer needs to route by cookie or IP. Disabling long-polling and using only the WebSocket transport avoids the requirement, at the cost of clients on restrictive networks failing to connect.
+
+**2. Broadcasts stop at the server boundary.** Client A is connected to server 1. Something happens on server 2 and it calls `io.to(userId).emit(...)`. Server 2 only knows about its own sockets, so A never hears about it. The servers need a way to tell each other.
+
+That job belongs to an **adapter**. There are adapters for Redis, Postgres, MongoDB, cloud queues and more, and the Redis one is the most common.
+
+## Redis, and pub/sub
+
+Redis is an in-memory data structure server. Three facts explain most of it:
+
+1. It lives in memory, so it is very fast, and your data must fit in RAM.
+2. Commands run one at a time, so a single command is atomic. That is why `INCR` is safe to use as a shared counter.
+3. Values have types: strings, hashes, lists, sets, sorted sets and streams. A counter is a string, a leaderboard is a sorted set.
+
+It also does **publish/subscribe**. Subscribers listen on named channels, and publishers send to a channel without knowing who is listening:
+
+```text
+# terminal 1                  # terminal 2
+SUBSCRIBE news                PUBLISH news "hello"
+```
+
+Opening two `redis-cli` windows and trying that is the quickest way to see it. Two properties matter a lot:
+
+- **At-most-once delivery.** Pub/sub is fire-and-forget. If a subscriber is disconnected when a message is published, it never gets it, and Redis does not replay it. For stronger guarantees, Redis **Streams** persist messages.
+- **It is independent of keys.** Channels have nothing to do with the key space or database numbers, so if several environments share one Redis server, you need to prefix channel names yourself.
+
+## Putting them together: the Redis adapter
+
+The Socket.IO Redis adapter uses pub/sub to join the servers up. When a server emits to a room, it delivers to its own matching sockets and also **publishes the packet on a Redis channel**. Every other server is subscribed to that channel, receives the packet, and delivers it to its own matching sockets.
+
+```text
+server 2 calls io.to(userId).emit("call-started")
+        |
+        +--> its own sockets in that room
+        |
+        +--> PUBLISH on a Redis channel
+                 |
+                 v
+        server 1 receives it, delivers to its sockets in that room
+        (client A is connected here, and gets the event)
+```
+
+Setting it up is two Redis connections (one to publish, one to subscribe) and one line:
+
+```javascript
+const pubClient = new Redis();
+const subClient = pubClient.duplicate();
+
+io.adapter(createAdapter(pubClient, subClient));
+```
+
+Its limits follow directly from pub/sub. Nothing is stored in Redis, so there is no replay: if Redis is down, events only reach clients on the server that emitted them. Sticky sessions are still required. And the packets are not signed or encrypted, so Redis has to be trusted, internal infrastructure.
+
+## Lessons that only showed up when running it
+
+The article covers what I built. These are the lessons that were not in it:
+
+- **Reconnection needs a policy, not just a retry.** Exponential backoff with a cap stops a restart becoming a stampede, and sometimes the right answer is to stop retrying, such as when the server says the user has signed out.
+- **Namespace the adapter's channel.** Several environments sharing one Redis server will broadcast into each other under the default channel prefix.
+- **A sleeping Redis breaks things quietly.** A managed instance that hibernates when idle can leave the adapter's subscriber receiving nothing, so delivery between servers fails with no error. Periodic traffic keeps it awake.
+- **Keep the offline queue on.** The adapter makes its own publishes internally. If commands are rejected immediately during a brief reconnect, those rejections can surface as unhandled errors and take the process down. Letting commands queue until the connection returns turns a hiccup into a short delay.
+
+## The path I would follow
+
+This is the order that made the ideas stick, building something small at each step:
+
+1. **A raw WebSocket echo server** with `ws`, and a browser client. Send messages both ways.
+2. **Add the missing parts by hand.** A heartbeat, and a client that reconnects with backoff. Kill the server and watch what happens. This is what makes the next step make sense.
+3. **Move to Socket.IO.** Rebuild the same thing and notice what disappears: reconnection, heartbeat, buffering. Then try events with acknowledgements and rooms.
+4. **Run two instances behind a simple load balancer.** Connect a client to one, emit from the other, and watch the message fail to arrive. Seeing the problem first is the point.
+5. **Learn Redis basics.** Strings, hashes, sets, expiry. Then open two `redis-cli` windows and try `SUBSCRIBE` and `PUBLISH`.
+6. **Add the Redis adapter** and run the same test. The missing message now arrives. Subscribe to the adapter's channel in `redis-cli` and read the packets going past.
+7. **Break it on purpose.** Stop Redis, drop the network, restart a server. Write down what each failure does to a connected client.
+8. **Add authentication and origin checks** at the handshake, and a room per user.
+
+The two steps that taught me the most were the ones where something fails: step 4, where broadcasts stop at the server boundary, and step 7, where the failures show how much of the reliability is your job.
+
+## Pitfalls
+
+- **Forgetting sticky sessions** when long-polling is enabled. Symptoms are random 400 errors on reconnect.
+- **Proxy timeouts.** A load balancer that closes idle connections sooner than your ping interval produces "transport close" errors.
+- **Assuming pub/sub is reliable.** It is not. Anything that must not be missed needs persistence, such as Streams or a database.
+- **Reconnection stampedes.** After a server restart, every client retries at once. Backoff with some randomness spreads them out.
+- **Unauthenticated sockets.** Check identity and origin during the handshake, not after the connection is open.
+- **Trusting Redis too much.** The adapter does not authenticate its messages, so keep Redis on a private network with access control.
+- **Heavy payloads.** Send small events and let clients fetch large data over HTTP.
+
+## A small project to try
+
+Build a notification service: a Node server that accepts a simple POST to "notify user X", and a browser page that shows notifications live. Run it as two instances, with the adapter and a room per user, and confirm that a POST handled by one instance reaches a browser connected to the other. Then stop Redis in the middle and write down exactly what you see.
